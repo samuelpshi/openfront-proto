@@ -226,6 +226,9 @@ void conquer(int p, int t) {
     int n = neighbors(t, nb);
     for (int i = 0; i < n; i++) 
         update_border(nb[i]);
+
+    if (prev != 0 && players[prev].tiles.count == 0)
+        players[prev].alive = 0;
 }
 
 void players_reset(void) {
@@ -290,10 +293,44 @@ void atk_push(Attack *a, int t) {
 }
 
 void attack_start(int attacker, int target, float troops) {
-    int i = find_free_slot();
-    if (i < 0) return;                 /* all slots busy, drop the attack */
+    if (attacker == target) return;
 
-    Attack *a = &attacks[i];           /* pointer to the real slot, not a copy */
+    if (troops > players[attacker].troops) troops = players[attacker].troops;
+    if (troops < 1.0f) return;
+    players[attacker].troops -= troops;
+
+    for (int i = 0; i < MAXATK; i++) {
+        if (!attacks[i].active) continue;
+        if (attacks[i].attacker != target || attacks[i].target != attacker) continue;
+        if (attacks[i].troops > troops) {
+            attacks[i].troops -= troops;
+            return;
+        }
+        troops -= attacks[i].troops;
+        attacks[i].active = 0;
+        if (troops <= 0.0f) return;
+    }
+
+    for (int i = 0; i < MAXATK; i++) {
+        if (!attacks[i].active) continue;
+        if (attacks[i].attacker != attacker || attacks[i].target != target) continue;
+        troops += attacks[i].troops;
+        attacks[i].active = 0;
+    }
+
+    if (troops < 1.0f) return;
+
+    int i = find_free_slot();
+    if (i < 0) {
+        players[attacker].troops += troops;
+#ifdef DEBUG
+        printf("attack_start: no free slot (a=%d t=%d troops=%.1f)\n",
+               attacker, target, troops);
+#endif
+        return;
+    }
+
+    Attack *a = &attacks[i];
 
     a->active   = 1;
     a->attacker = attacker;
@@ -313,6 +350,32 @@ void attack_start(int attacker, int target, float troops) {
             if (owner[nb[k]] == target && terrain[nb[k]] != 0)
                 atk_push(a, nb[k]);
         }
+    }
+}
+
+#define WIPE_TILES 12
+
+void dead_defender(int attacker, int target) {
+    if (target == 0) return;
+
+    for (int pass = 0; pass < 100; pass++) {
+        int progress = 0;
+        TileSet *ts = &players[target].tiles;
+
+        for (int i = ts->count - 1; i >= 0; i--) {
+            int t = ts->tiles[i];
+            int nb[4];
+            int n = neighbors(t, nb);
+            int taker = 0;
+            for (int k = 0; k < n; k++) {
+                int o = owner[nb[k]];
+                if (o == attacker) { taker = attacker; break; }
+                if (o != 0 && o != target && taker == 0) taker = o;
+            }
+            if (taker != 0) { conquer(taker, t); progress = 1; }
+        }
+
+        if (!progress || players[target].tiles.count == 0) break;
     }
 }
 
@@ -377,6 +440,9 @@ void attack_tick(Attack *a) {
         budget -= cost;
         a->troops -= atk_loss;
         conquer(a->attacker, t);
+
+        if (a->target != 0 && players[a->target].tiles.count < WIPE_TILES)
+            dead_defender(a->attacker, a->target);
     }
 }
 
@@ -490,14 +556,89 @@ void sim_reset(void){
     }
     ticks = 0;
 }
+
+/* ---- bordering-player instrumentation (DEBUG only) ---------------------- */
+#ifdef DEBUG
+
+static long nbr_hist[MAXP];       /* all samples, indexed by distinct-neighbor count */
+static long nbr_hist_late[MAXP];  /* samples taken once the map is mostly claimed */
+static long nbr_samples, nbr_samples_late;
+
+/* Distinct players (excluding p and terra nullius) adjacent to p's border. */
+static int count_bordering(int p) {
+    int seen[MAXP];
+    memset(seen, 0, sizeof(seen));
+    int n = 0;
+    TileSet *b = &players[p].border;
+    for (int i = 0; i < b->count; i++) {
+        int nb[4];
+        int k = neighbors(b->tiles[i], nb);
+        for (int j = 0; j < k; j++) {
+            int o = owner[nb[j]];
+            if (o != 0 && o != p && !seen[o]) { seen[o] = 1; n++; }
+        }
+    }
+    return n;
+}
+
+/* Call every SAMPLE_EVERY ticks from the main loop. */
+static void sample_bordering(void) {
+    int claimed = 0;
+    for (int p = 1; p < MAXP; p++) claimed += players[p].tiles.count;
+    int late = (land_tiles > 0) && (claimed * 100 >= land_tiles * 80);
+
+    for (int p = 1; p < MAXP; p++) {
+        if (players[p].tiles.count == 0) continue;   /* NOT players[p].alive — never cleared */
+        int n = count_bordering(p);
+        nbr_hist[n]++;
+        nbr_samples++;
+        if (late) { nbr_hist_late[n]++; nbr_samples_late++; }
+    }
+}
+
+static void print_one_hist(const char *label, long *hist, long total) {
+    printf("\n%s  (n=%ld)\n", label, total);
+    if (total == 0) { printf("  no samples\n"); return; }
+    long cum = 0;
+    double mean = 0.0;
+    for (int i = 0; i < MAXP; i++) mean += (double)i * hist[i];
+    mean /= (double)total;
+    for (int i = 0; i < MAXP; i++) {
+        if (hist[i] == 0 && i > 0 && cum == total) break;
+        cum += hist[i];
+        double pct = 100.0 * hist[i] / total;
+        double cpct = 100.0 * cum / total;
+        printf("  %d neighbors: %8ld  %5.1f%%   cum %5.1f%%  ", i, hist[i], pct, cpct);
+        int bars = (int)(pct / 2.0);
+        for (int b = 0; b < bars; b++) putchar('#');
+        putchar('\n');
+    }
+    printf("  mean %.2f\n", mean);
+}
+
+static void print_nbr_hist(void) {
+    print_one_hist("bordering players, all ticks", nbr_hist, nbr_samples);
+    print_one_hist("bordering players, map >=80% claimed", nbr_hist_late, nbr_samples_late);
+}
+
+#else
+#define sample_bordering() ((void)0)
+#define print_nbr_hist()   ((void)0)
+#endif
+/* ------------------------------------------------------------------------ */
+/* ------------------------------------------------------------------------ */
+
 void sim_run(int nticks){
-    for (int tick=0; tick<nticks;tick++){
+    for (int tick=0; tick<nticks; tick++){
         ticks++;
         for (int p = 1; p < MAXP; p++) bot_tick(p);
         for (int i = 0; i < MAXATK; i++)
             if (attacks[i].active) attack_tick(&attacks[i]);
         for (int p = 1; p < MAXP; p++) player_tick(p);
-        if (ticks % 10 == 0 && win_check()) return;
+        if (ticks % 10 == 0) {
+            sample_bordering();
+            if (win_check()) return;
+        }
     }
 }
 
@@ -702,6 +843,14 @@ void run_tests(void) {}
 
 /* ---------------- main ---------------- */
 
+void hist_run(int episodes, int nticks){
+    for (int e = 0; e < episodes; e++) {
+        sim_reset();
+        sim_run(nticks);
+    }
+    print_nbr_hist();
+}
+
 void bench(void) {
     long total_ticks = 0;
     int episodes = 0;
@@ -726,6 +875,6 @@ int main(void) {
     fill_terrain();
     //print_map();
     run_tests();
-    bench();
+    hist_run(300, 2000);
     return 0;
 }
