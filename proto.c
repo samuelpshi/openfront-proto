@@ -42,9 +42,15 @@ int rng_below(int n) {
     return (int)(rng_next() % (unsigned int)n); 
 }
 
-/* uniform in [lo, hi] inclusive, matching source's nextInt(lo, hi) */
-int rng_int(int lo, int hi) { 
-    return lo + rng_below(hi - lo + 1); 
+/* Matches source's PseudoRandom.nextInt(min, max): min INCLUSIVE, max
+   EXCLUSIVE. The spec claimed nextInt was inclusive both ends; the class
+   comment in PseudoRandom.ts says otherwise, verified Aug 2026. Keeping the
+   exclusive convention here means every nextInt(a, b) in the TS transcribes to
+   rng_int(a, b) argument-for-argument, which kills a whole class of off-by-one
+   transcription errors. Call sites below are verbatim from source. */
+int rng_int(int lo, int hi) {
+    if (hi <= lo) return lo;   /* nextInt(0,0) is 0 in JS; avoid mod-by-zero */
+    return lo + rng_below(hi - lo);
 }
 
 int ref(int x, int y) { return y*W + x; }
@@ -68,6 +74,38 @@ int neighbors(int r, int *out) {
     if (rx(r) != W-1) 
         out[n++] = r+1;
     return n;
+}
+
+/* 8-connectivity, used only by the annexation cluster fill (spec 9 —
+   forEachNeighborWithDiag). Writes up to 8 tiles. */
+int neighbors8(int r, int *out) {
+    /* offsets, not ref(x,y) per neighbor: the obvious dx/dy double loop costs
+       eight multiplies per call and measured ~9% of total throughput once
+       annexation was wired in. One div and one mod instead. */
+    int x = r % W, y = r / W, n = 0;
+    int up = (y != 0), dn = (y != H-1), lf = (x != 0), rt = (x != W-1);
+    if (up) { if (lf) out[n++] = r-W-1; out[n++] = r-W; if (rt) out[n++] = r-W+1; }
+    if (lf) out[n++] = r-1;
+    if (rt) out[n++] = r+1;
+    if (dn) { if (lf) out[n++] = r+W-1; out[n++] = r+W; if (rt) out[n++] = r+W+1; }
+    return n;
+}
+
+int on_map_edge(int t) {
+    int x = rx(t), y = ry(t);
+    return x == 0 || x == W-1 || y == 0 || y == H-1;
+}
+
+/* Source distinguishes isOceanShore from isShore (ocean bit vs shoreline bit).
+   We have neither — one water value, no lakes — so both collapse to "land tile
+   touching water". */
+int is_shore(int t) {
+    if (terrain[t] == 0) return 0;
+    int nb[4];
+    int n = neighbors(t, nb);
+    for (int i = 0; i < n; i++)
+        if (terrain[nb[i]] == 0) return 1;
+    return 0;
 }
 
 void fill_terrain(void) {
@@ -224,6 +262,19 @@ typedef struct {
 
 Player players[MAXP];
 
+/* Player type. Source has Human / Nation / Bot; we hardcode two (spec 13), and
+   every seat is a Bot until the agent takes one in the PufferLib skeleton.
+   Three separate handicaps hang off this: maxTroops/3, troop growth x0.5, and
+   the human-vs-bot mag *= 0.7 attack modifier. */
+unsigned char is_bot[MAXP];
+
+/* Annexation scheduling (spec 9). last_calc is seeded with a per-seat offset so
+   the cost of the cluster scan is spread across ticks rather than spiking on
+   one; last_tile_change is the cheap-out that skips players whose territory has
+   not moved since their last scan. */
+long last_calc[MAXP];
+long last_tile_change[MAXP];
+
 void update_border(int t) {
     int p = owner[t];
     if (p == 0) return;
@@ -242,6 +293,14 @@ void update_border(int t) {
 }
 
 void conquer(int p, int t) {
+#ifdef DEBUG
+    /* source throws on water/impassable; every sim caller already filters, so
+       this only exists to catch a caller that stops filtering */
+    if (terrain[t] == 0) {
+        printf("CONQUER WATER: p%d tile %d\n", p, t);
+        exit(1);
+    }
+#endif
     int prev = owner[t];
     if (prev == p) return;
 
@@ -252,6 +311,14 @@ void conquer(int p, int t) {
 
     owner[t] = p;
     ts_add(&players[p].tiles, t);
+    /* alive is a cached "owns at least one tile" (source: isAlive() is exactly
+       numTilesOwned() > 0). It is kept as a field only so player_tick/bot_tick/
+       annex_tick can skip dead seats without touching the TileSet. Maintained
+       in BOTH directions here, which is the only place territory moves —
+       clearing it on loss alone left spawned-but-not-yet-placed seats reading
+       as alive, and annexation can empty a player without going through
+       attack_tick at all. */
+    players[p].alive = 1;
 
     update_border(t);
     int nb[4];
@@ -259,30 +326,47 @@ void conquer(int p, int t) {
     for (int i = 0; i < n; i++) 
         update_border(nb[i]);
 
+    last_tile_change[p] = ticks;
+    if (prev != 0) last_tile_change[prev] = ticks;
+
     if (prev != 0 && players[prev].tiles.count == 0)
         players[prev].alive = 0;
 }
+
+#define ANNEX_PERIOD 20   /* source ticksPerClusterCalc */
 
 void players_reset(void) {
     for (int p = 0; p < MAXP; p++) {
         ts_init(&players[p].tiles);
         ts_init(&players[p].border);
         players[p].troops = 0.0f;
-        players[p].alive  = 1;
+        players[p].alive  = 0;   /* nobody owns tiles until spawn_place runs */
+        is_bot[p]         = 1;
+        /* source: lastCalc = ticks + simpleHash(id) % ticksPerClusterCalc.
+           Any fixed spread works; this one is deterministic per seat. */
+        last_calc[p]        = (long)(p * 7 % ANNEX_PERIOD);
+        last_tile_change[p] = 0;
     }
     memset(owner, 0, sizeof(owner));
 }
 
 float max_troops(int p) {
     float tiles = (float)players[p].tiles.count;
-    return 2.0f * (powf(tiles, 0.6f) * 1000.0f + 50000.0f);
+    float m = 2.0f * (powf(tiles, 0.6f) * 1000.0f + 50000.0f);
+    if (is_bot[p]) m /= 3.0f;
+    return m;
 }
 
 void player_tick(int p) {
     if (!players[p].alive) return;
     float max = max_troops(p);
     float troops = players[p].troops;
-    float add = (10.0f + powf(troops, 0.73f) / 4.0f) * (1.0f - troops / max);
+    /* source order: base rate, then the capacity ratio, then the bot handicap.
+       The ratio goes negative when max shrinks below current troops (territory
+       loss), which is load-bearing — troops decay toward the new cap. */
+    float add = 10.0f + powf(troops, 0.73f) / 4.0f;
+    add *= (1.0f - troops / max);
+    if (is_bot[p]) add *= 0.5f;
     troops += add;
     if (troops > max) troops = max;
     players[p].troops = troops;
@@ -461,9 +545,15 @@ void attack_tick(Attack *a) {
 
         float atk_loss, cost;
         if (a->target == 0) {
-            atk_loss = mag / 5.0f;
+            /* Bot attackers pay half the terra nullius toll. Terra nullius is
+               not a Bot, so the 0.7 modifier below never applies here. */
+            atk_loss = is_bot[a->attacker] ? mag / 10.0f : mag / 5.0f;
             cost = within(2000.0f * (speed > 10.0f ? speed : 10.0f) / a->troops, 5.0f, 100.0f);
         } else {
+            /* Human/Nation attacking a Bot takes 30% less loss. Both sides must
+               be players, which is why this sits inside the vs-player branch. */
+            if (!is_bot[a->attacker] && is_bot[a->target]) mag *= 0.7f;
+
             float def_troops = players[a->target].troops;
             int def_tiles = players[a->target].tiles.count;
             float def_loss = (def_tiles > 0) ? def_troops / def_tiles : 0.0f;
@@ -471,7 +561,10 @@ void attack_tick(Attack *a) {
             float alt_loss = 1.3f * def_loss * (mag / 100.0f);
             atk_loss = 0.6f*cur_loss + 0.4f*alt_loss;
             cost = within(def_troops / (5.0f * a->troops), 0.2f, 1.5f) * speed;
+            /* source removeTroops clamps at zero; powf(negative, 0.73) in
+               player_tick would be NaN otherwise */
             players[a->target].troops -= def_loss;
+            if (players[a->target].troops < 0.0f) players[a->target].troops = 0.0f;
         }
 
         budget -= cost;
@@ -480,6 +573,261 @@ void attack_tick(Attack *a) {
 
         if (a->target != 0 && players[a->target].tiles.count < WIPE_TILES)
             dead_defender(a->attacker, a->target);
+    }
+}
+
+/* ---------------- annexation (spec 9) ----------------
+
+   Source: PlayerExecution.removeClusters. Re-read against the TS on Aug 2026;
+   three things differ from what openfront_env_spec.md 9 says, and the first one
+   is not cosmetic:
+
+   1. THE INSCRIPTION TEST IS THE OTHER WAY AROUND. Util.inscribed(outer, inner)
+      is called as inscribed(enemyBox, clusterBox), i.e. the ENEMY neighbor
+      bounding box must contain the CLUSTER's, not the reverse. Under the spec's
+      reading the rule can never fire: a ring of enemy tiles enclosing a cluster
+      always extends one tile past it on every side. The correct reading is what
+      makes the rule mean "the enemy wraps around us."
+
+   2. removeCluster now gates on isEnclosed(firstTile) before transferring
+      anything. The surround checks only look at one border component, but the
+      fill below hands over the whole territory that component sits on. A
+      component wrapped around an interior hole passes the surround test while
+      sitting on an otherwise wide-open empire, so without this gate a single
+      enemy enclave would donate the entire player. Unclaimed land is walked
+      through (a hole is not an exit); water and the map edge end it.
+
+   3. isOceanShore (largest-cluster rule) and isShore (every other cluster)
+      collapse to the same predicate here — no lake/ocean distinction and no
+      shoreline bit, so both are "land tile touching water" (is_shore).
+
+   Cost is O(border), not O(territory): the cluster fill only ever walks the
+   player's border set, and last_tile_change skips players who haven't moved. */
+
+/* Source checks numTilesOwned() < 100 to force a scan regardless of the 20-tick
+   period. Same rescale argument as WIPE_TILES — 100 is 0.02% of a real map. */
+#define ANNEX_TILES WIPE_TILES
+
+static unsigned int cl_visited[N];     /* generation stamps, never cleared */
+static unsigned int cl_gen = 0;
+static int cl_stack[N];                /* reused DFS stack */
+static int cl_comp[N];                 /* all components concatenated */
+static int cl_start[N];
+static int cl_size[N];
+
+static unsigned int ff_visited[N];     /* separate array: the territory fill runs */
+static unsigned int ff_gen = 0;        /* inside the component loop and must not */
+static int ff_stack[N];                /* disturb cl_visited */
+static int ff_take[N];
+
+long annex_events = 0;
+long annex_tiles_moved = 0;
+
+/* largest != 0 selects surroundedBySamePlayer (every 4-neighbor owned, exactly
+   one distinct enemy); otherwise isSurrounded (unowned neighbors allowed, any
+   number of enemies). Both require the enemy box to contain the cluster box. */
+static int annex_surrounded(int p, const int *tiles, int n, int largest) {
+    int cminx = W, cmaxx = -1, cminy = H, cmaxy = -1;
+    int eminx = W, emaxx = -1, eminy = H, emaxy = -1;
+    int seen[MAXP];
+    int distinct = 0;
+    memset(seen, 0, sizeof(seen));
+
+    for (int i = 0; i < n; i++) {
+        int t = tiles[i];
+        int x = rx(t), y = ry(t);
+        if (x < cminx) cminx = x;
+        if (x > cmaxx) cmaxx = x;
+        if (y < cminy) cminy = y;
+        if (y > cmaxy) cmaxy = y;
+
+        if (is_shore(t) || on_map_edge(t)) return 0;
+
+        int nb[4];
+        int k = neighbors(t, nb);
+        for (int j = 0; j < k; j++) {
+            int u = nb[j];
+            int o = owner[u];
+            if (o == p) continue;
+            if (o == 0) {
+                if (largest) return 0;   /* unowned neighbor breaks full surround */
+                continue;
+            }
+            if (!seen[o]) { seen[o] = 1; distinct++; }
+            int ux = rx(u), uy = ry(u);
+            if (ux < eminx) eminx = ux;
+            if (ux > emaxx) emaxx = ux;
+            if (uy < eminy) eminy = uy;
+            if (uy > emaxy) emaxy = uy;
+        }
+        /* source re-checks enemies.size !== 1 after every tile, so a second
+           distinct enemy aborts immediately rather than at the end */
+        if (largest && distinct != 1) return 0;
+    }
+
+    if (largest && distinct != 1) return 0;
+    if (!largest && distinct == 0) return 0;
+
+    return eminx <= cminx && eminy <= cminy && emaxx >= cmaxx && emaxy >= cmaxy;
+}
+
+/* Can the territory reachable from start escape to water or the map edge,
+   walking our own tiles and unclaimed land but not other players'? */
+static int annex_enclosed(int p, int start) {
+    ff_gen++;
+    if (ff_gen == 0) { memset(ff_visited, 0, sizeof(ff_visited)); ff_gen = 1; }
+
+    int sp = 0;
+    ff_visited[start] = ff_gen;
+    ff_stack[sp++] = start;
+
+    while (sp > 0) {
+        int t = ff_stack[--sp];
+        if (on_map_edge(t)) return 0;
+        int nb[4];
+        int k = neighbors(t, nb);
+        for (int j = 0; j < k; j++) {
+            int u = nb[j];
+            if (ff_visited[u] == ff_gen) continue;
+            int o = owner[u];
+            if (o != 0 && o != p) continue;            /* someone else's tile: wall */
+            if (o == 0 && terrain[u] == 0) return 0;   /* open water: a way out */
+            ff_visited[u] = ff_gen;
+            ff_stack[sp++] = u;
+        }
+    }
+    return 1;
+}
+
+/* The enemy running the largest attack on p, restricted to enemies bordering
+   this cluster; failing that, the enemy bordering it on the most tiles. */
+static int annex_capturer(int p, const int *tiles, int n) {
+    int cnt[MAXP];
+    memset(cnt, 0, sizeof(cnt));
+    int any = 0;
+
+    for (int i = 0; i < n; i++) {
+        int nb[4];
+        int k = neighbors(tiles[i], nb);
+        for (int j = 0; j < k; j++) {
+            int o = owner[nb[j]];
+            if (o == 0 || o == p) continue;
+            cnt[o]++;
+            any = 1;
+        }
+    }
+    if (!any) return 0;
+
+    int best = 0;
+    float best_troops = 0.0f;
+    for (int i = 0; i < MAXATK; i++) {
+        if (!attacks[i].active) continue;
+        if (attacks[i].target != p) continue;
+        if (cnt[attacks[i].attacker] == 0) continue;
+        if (attacks[i].troops > best_troops) {
+            best_troops = attacks[i].troops;
+            best = attacks[i].attacker;
+        }
+    }
+    if (best != 0) return best;
+
+    int mode = 0, mode_cnt = 0;
+    for (int q = 1; q < MAXP; q++)
+        if (cnt[q] > mode_cnt) { mode_cnt = cnt[q]; mode = q; }
+    return mode;
+}
+
+static void annex_remove(int p, const int *tiles, int n) {
+    /* an earlier removal this tick may already have taken these tiles */
+    for (int i = 0; i < n; i++)
+        if (owner[tiles[i]] != p) return;
+
+    int cap = annex_capturer(p, tiles, n);
+    if (cap == 0) return;
+    if (!annex_enclosed(p, tiles[0])) return;
+
+    ff_gen++;
+    if (ff_gen == 0) { memset(ff_visited, 0, sizeof(ff_visited)); ff_gen = 1; }
+
+    int sp = 0, ntake = 0;
+    ff_visited[tiles[0]] = ff_gen;
+    ff_stack[sp++] = tiles[0];
+
+    while (sp > 0) {
+        int t = ff_stack[--sp];
+        ff_take[ntake++] = t;
+        int nb[4];
+        int k = neighbors(t, nb);
+        for (int j = 0; j < k; j++) {
+            int u = nb[j];
+            if (ff_visited[u] == ff_gen) continue;
+            if (owner[u] != p) continue;
+            ff_visited[u] = ff_gen;
+            ff_stack[sp++] = u;
+        }
+    }
+
+    /* collect first, conquer second — conquer rewrites owner[] under the fill */
+    for (int i = 0; i < ntake; i++) conquer(cap, ff_take[i]);
+
+    annex_events++;
+    annex_tiles_moved += ntake;
+}
+
+void annex_tick(int p) {
+    if (!players[p].alive) return;
+    TileSet *b = &players[p].border;
+    if (b->count == 0) return;
+
+    if (!(ticks - last_calc[p] > ANNEX_PERIOD ||
+          players[p].tiles.count < ANNEX_TILES)) return;
+    if (last_tile_change[p] < last_calc[p]) return;
+    last_calc[p] = ticks;
+
+    cl_gen++;
+    if (cl_gen == 0) { memset(cl_visited, 0, sizeof(cl_visited)); cl_gen = 1; }
+
+    /* 8-connected components of the border set */
+    int ncomp = 0, ntot = 0;
+    for (int i = 0; i < b->count; i++) {
+        int s = b->tiles[i];
+        if (cl_visited[s] == cl_gen) continue;
+
+        cl_start[ncomp] = ntot;
+        int sp = 0;
+        cl_visited[s] = cl_gen;
+        cl_stack[sp++] = s;
+
+        while (sp > 0) {
+            int t = cl_stack[--sp];
+            cl_comp[ntot++] = t;
+            int nb[8];
+            int k = neighbors8(t, nb);
+            for (int j = 0; j < k; j++) {
+                int u = nb[j];
+                if (cl_visited[u] == cl_gen) continue;
+                if (!ts_has(b, u)) continue;
+                cl_visited[u] = cl_gen;
+                cl_stack[sp++] = u;
+            }
+        }
+        cl_size[ncomp] = ntot - cl_start[ncomp];
+        ncomp++;
+    }
+    if (ncomp == 0) return;
+
+    int largest = 0;
+    for (int i = 1; i < ncomp; i++)
+        if (cl_size[i] > cl_size[largest]) largest = i;
+
+    if (annex_surrounded(p, &cl_comp[cl_start[largest]], cl_size[largest], 1))
+        annex_remove(p, &cl_comp[cl_start[largest]], cl_size[largest]);
+
+    for (int i = 0; i < ncomp; i++) {
+        if (i == largest) continue;
+        if (!players[p].alive) return;
+        if (annex_surrounded(p, &cl_comp[cl_start[i]], cl_size[i], 0))
+            annex_remove(p, &cl_comp[cl_start[i]], cl_size[i]);
     }
 }
 
@@ -540,29 +888,76 @@ int bordering_players(int p, int *out) {
     return count;                          /* not out */
 }
 
+/* Largest active attack aimed at p, returning its attacker (0 if none).
+   Non-bots ignore bot attackers (findIncomingAttackPlayer); bots count
+   everyone. Only bots call this today, but the agent seat will. */
+int largest_incoming_attacker(int p) {
+    int best = 0;
+    float best_troops = 0.0f;
+    for (int i = 0; i < MAXATK; i++) {
+        if (!attacks[i].active) continue;
+        if (attacks[i].target != p) continue;
+        if (!is_bot[p] && is_bot[attacks[i].attacker]) continue;
+        if (attacks[i].troops > best_troops) {
+            best_troops = attacks[i].troops;
+            best = attacks[i].attacker;
+        }
+    }
+    return best;
+}
+
+/* AiAttackBehavior.attackRandomTarget. The trigger gate comes FIRST — source
+   checks hasTriggerRatioTroops before looking for retaliation targets, so
+   "forced" retaliation only skips shouldAttack, which is a no-op for a bot
+   attacker anyway. Every branch reserves maxTroops*reserve_ratio. */
+void bot_attack_random(int p) {
+    if (players[p].troops < bots[p].trigger_ratio * max_troops(p)) return;
+
+    float send = players[p].troops - max_troops(p) * bots[p].reserve_ratio;
+    if (send < 1.0f) return;   /* sendAttack fails identically for every target */
+
+    int r = largest_incoming_attacker(p);
+    if (r != 0) {
+        attack_start(p, r, send);
+        return;
+    }
+
+    int cand[MAXP];
+    int count = bordering_players(p, cand);
+    if (count == 0) return;
+
+    /* shuffleArray, then take the first candidate that goes through */
+    for (int i = count - 1; i > 0; i--) {
+        int j = rng_below(i + 1);
+        int tmp = cand[i]; cand[i] = cand[j]; cand[j] = tmp;
+    }
+    for (int i = 0; i < count; i++) {
+        int q = cand[i];
+        /* 50% skip per Human/Nation candidate; bots are always attackable */
+        if (!is_bot[q] && rng_below(2) == 0) continue;
+        attack_start(p, q, send);
+        return;
+    }
+}
+
 void bot_tick(int p) {
     if (!players[p].alive) return;
     if (ticks % bots[p].attack_rate != bots[p].attack_off) return;
 
     if (bots[p].neighbors_tn) {
-        if (has_tn_neighbor(p) == 0) {
-            bots[p].neighbors_tn = 0;
-            return;
+        if (has_tn_neighbor(p)) {
+            float send = players[p].troops - max_troops(p) * bots[p].expand_ratio;
+            if (send >= 1.0f) {
+                attack_start(p, 0, send);
+                return;
+            }
+            /* too poor to expand: source falls through to attackRandomTarget
+               rather than burning the decision tick */
+        } else {
+            bots[p].neighbors_tn = 0;   /* cleared permanently, then fall through */
         }
-        
-        float send = players[p].troops - max_troops(p) * bots[p].expand_ratio;
-        if (send < 1.0f) return;
-        
-        attack_start(p, 0, send);
-    } else {
-        if (players[p].troops < bots[p].trigger_ratio * max_troops(p)) return;
-        int cand[MAXP];
-        int count = bordering_players(p, cand);
-        if (count == 0) return;
-        int target = cand[rng_below(count)];        float send = players[p].troops - max_troops(p) * bots[p].reserve_ratio;
-        if (send < 1.0f) return;
-        attack_start(p, target, send);
     }
+    bot_attack_random(p);
 }
 
 int win_check(void) {
@@ -646,6 +1041,10 @@ int spawn_place(int p) {
 long spawn_failures = 0;
 
 void sim_reset(void){
+    /* before spawn_place, not after: conquer() now stamps last_tile_change with
+       the tick counter, and a leftover value from the previous episode would
+       make every player look freshly-changed on tick 0 */
+    ticks = 0;
     fill_terrain();                 /* fresh map per episode */
     players_reset();
     bots_init();
@@ -654,13 +1053,12 @@ void sim_reset(void){
 
     for (int p = 1; p < MAXP; p++) {
         if (!spawn_place(p)) {      /* no room left: player sits out this episode */
-            players[p].alive = 0;
+            players[p].alive = 0;   /* redundant since players_reset, kept explicit */
             spawn_failures++;
             continue;
         }
         players[p].troops = 1000.0f;
     }
-    ticks = 0;
 }
 
 /* ---- bordering-player instrumentation (DEBUG only) ---------------------- */
@@ -694,7 +1092,7 @@ static void sample_bordering(void) {
     int late = (land_tiles > 0) && (claimed * 100 >= land_tiles * 80);
 
     for (int p = 1; p < MAXP; p++) {
-        if (players[p].tiles.count == 0) continue;   /* NOT players[p].alive — never cleared */
+        if (!players[p].alive) continue;
         int n = count_bordering(p);
         nbr_hist[n]++;
         nbr_samples++;
@@ -734,21 +1132,6 @@ static void print_nbr_hist(void) {
 /* ------------------------------------------------------------------------ */
 /* ------------------------------------------------------------------------ */
 
-void sim_run(int nticks){
-    for (int tick=0; tick<nticks; tick++){
-        ticks++;
-        for (int p = 1; p < MAXP; p++) bot_tick(p);
-        for (int i = 0; i < MAXATK; i++)
-            if (attacks[i].active) attack_tick(&attacks[i]);
-        for (int p = 1; p < MAXP; p++) player_tick(p);
-        if (ticks % 10 == 0) {
-            sample_bordering();
-            if (win_check()) return;
-        }
-    }
-}
-
-
 /* ---------------- invariant checks (debug builds only) ---------------- */
 
 #ifdef DEBUG
@@ -782,12 +1165,44 @@ void check_borders(void) {
                 exit(1);
             }
         }
+        /* alive must track tile ownership exactly: annexation can empty a
+           player through a path that does not go via attack_tick */
+        if ((players[p].tiles.count == 0) != (players[p].alive == 0)) {
+            printf("ALIVE BROKEN: p%d tiles=%d alive=%d\n",
+                   p, players[p].tiles.count, players[p].alive);
+            exit(1);
+        }
+        if (players[p].troops < 0.0f) {
+            printf("TROOPS BROKEN: p%d troops=%f\n", p, (double)players[p].troops);
+            exit(1);
+        }
+        if (players[p].troops != players[p].troops) {
+            printf("TROOPS NaN: p%d\n", p);
+            exit(1);
+        }
     }
 }
 #else
 #define ts_check(s)     ((void)0)
 #define check_borders() ((void)0)
 #endif
+
+void sim_run(int nticks){
+    for (int tick=0; tick<nticks; tick++){
+        ticks++;
+        for (int p = 1; p < MAXP; p++) bot_tick(p);
+        for (int i = 0; i < MAXATK; i++)
+            if (attacks[i].active) attack_tick(&attacks[i]);
+        /* spec 2: per player, troop growth then the annexation check */
+        for (int p = 1; p < MAXP; p++) { player_tick(p); annex_tick(p); }
+        if (ticks % 50 == 0) check_borders();
+        if (ticks % 10 == 0) {
+            sample_bordering();
+            if (win_check()) return;
+        }
+    }
+}
+
 
 /* ---------------- tests (debug builds only) ---------------- */
 
@@ -824,6 +1239,7 @@ void ts_test(void) {
 }
 
 void conquer_test(void) {
+    memset(terrain, 1, sizeof(terrain));   /* guard in conquer rejects water */
     players_reset();
     for (int step = 0; step < 50000; step++) {
         int p = 1 + rand() % (MAXP - 1);
@@ -840,6 +1256,7 @@ void conquer_test(void) {
 }
 
 void blob_test(void) {
+    memset(terrain, 1, sizeof(terrain));
     players_reset();
 
     /* solid 12x12 rectangles so interior (non-border) tiles actually exist */
@@ -923,7 +1340,7 @@ void attack_test(void) {
         for (int p = 1; p < MAXP; p++) bot_tick(p);
         for (int i = 0; i < MAXATK; i++)
             if (attacks[i].active) attack_tick(&attacks[i]);
-        for (int p = 1; p < MAXP; p++) player_tick(p);
+        for (int p = 1; p < MAXP; p++) { player_tick(p); annex_tick(p); }
         check_borders();
         if (tick % 25 == 0) {
             printf("tick %3ld:", ticks);
@@ -936,11 +1353,92 @@ void attack_test(void) {
     putchar('\n');
 }
 
+static void fill_rect(int p, int x0, int y0, int w, int h) {
+    for (int y = y0; y < y0 + h; y++)
+        for (int x = x0; x < x0 + w; x++)
+            conquer(p, ref(x, y));
+}
+
+/* Forces the schedule so annex_tick actually runs this call. */
+static void annex_force(int p) {
+    last_calc[p] = 0;
+    last_tile_change[p] = ticks;
+    annex_tick(p);
+}
+
+void annex_test(void) {
+    memset(terrain, 1, sizeof(terrain));   /* all land: isolate the geometry */
+    for (int i = 0; i < MAXATK; i++) attacks[i].active = 0;
+
+    /* --- positive: p2 is a 3x3 enclave inside p1's 12x12 --- */
+    players_reset();
+    ticks = 100;
+    fill_rect(1, 10, 10, 12, 12);
+    fill_rect(2, 15, 15,  3,  3);
+    check_borders();
+    if (players[1].tiles.count != 135 || players[2].tiles.count != 9) {
+        printf("ANNEX SETUP BROKEN: p1=%d p2=%d (expect 135/9)\n",
+               players[1].tiles.count, players[2].tiles.count);
+        exit(1);
+    }
+
+    long before = annex_events;
+    annex_force(2);
+    check_borders();
+    if (annex_events != before + 1) {
+        printf("ANNEX BROKEN: enclave not annexed (events %ld -> %ld)\n",
+               before, annex_events);
+        exit(1);
+    }
+    if (players[2].tiles.count != 0 || players[2].alive != 0) {
+        printf("ANNEX BROKEN: p2 tiles=%d alive=%d (expect 0/0)\n",
+               players[2].tiles.count, players[2].alive);
+        exit(1);
+    }
+    if (players[1].tiles.count != 144) {
+        printf("ANNEX BROKEN: p1 tiles=%d (expect 144)\n", players[1].tiles.count);
+        exit(1);
+    }
+
+    /* p1's own outer ring must survive the same pass: it is not surrounded */
+    annex_force(1);
+    check_borders();
+    if (players[1].tiles.count != 144) {
+        printf("ANNEX BROKEN: p1 annexed itself away, tiles=%d\n",
+               players[1].tiles.count);
+        exit(1);
+    }
+
+    /* --- negative: two blobs sharing one front, neither is enclosed --- */
+    players_reset();
+    ticks = 100;
+    fill_rect(1, 10, 10, 12, 12);
+    fill_rect(2, 22, 10, 12, 12);
+    check_borders();
+    before = annex_events;
+    annex_force(1);
+    annex_force(2);
+    check_borders();
+    if (annex_events != before) {
+        printf("ANNEX BROKEN: shared front annexed (events %ld -> %ld)\n",
+               before, annex_events);
+        exit(1);
+    }
+    if (players[1].tiles.count != 144 || players[2].tiles.count != 144) {
+        printf("ANNEX BROKEN: shared front moved tiles p1=%d p2=%d\n",
+               players[1].tiles.count, players[2].tiles.count);
+        exit(1);
+    }
+
+    printf("annex ok\n");
+}
+
 void run_tests(void) {
     ts_test();
     conquer_test();
     blob_test();
     heap_test();
+    annex_test();
     attack_test();
 }
 #else
@@ -950,10 +1448,24 @@ void run_tests(void) {}
 /* ---------------- main ---------------- */
 
 void hist_run(int episodes, int nticks){
+    long wins = 0, total_len = 0, survivors = 0, elim = 0;
     for (int e = 0; e < episodes; e++) {
         sim_reset();
         sim_run(nticks);
+        if (ticks < nticks) wins++;
+        total_len += ticks;
+        for (int p = 1; p < MAXP; p++) {
+            if (players[p].tiles.count > 0) survivors++;
+            else elim++;
+        }
     }
+    printf("episodes %d: wins %ld (%.1f%%), mean length %.0f ticks, "
+           "eliminated %.1f%%\n",
+           episodes, wins, 100.0*wins/episodes, (double)total_len/episodes,
+           100.0*elim/(elim+survivors));
+    printf("annexations %ld (%.2f/episode), tiles moved %ld (%.1f/event)\n",
+           annex_events, (double)annex_events/episodes, annex_tiles_moved,
+           annex_events ? (double)annex_tiles_moved/annex_events : 0.0);
     print_nbr_hist();
 }
 
