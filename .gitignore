@@ -1,3 +1,7 @@
 proto_dbg
 proto_fast
+of_dbg
+of_fast
+drive
 *.dSYM/
+.DS_Store
