@@ -1,3 +1,7 @@
+/* Territory conquest sim. Mechanics derived from OpenFrontIO
+   (github.com/openfrontio/OpenFrontIO, AGPL-3.0), commit fc50009.
+   Independent C implementation; no source transliterated. */
+
 #pragma once
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,65 +17,29 @@ typedef float obs_t;
 #define NUM_ATNS  1
 #define OBS_SIZE  31
 _Static_assert(OBS_SIZE == 6 + 5*ACT_NEIGHBORS, "OBS_SIZE out of sync");
-/* OpenFront-inspired N-player territory conquest sim.
-   Mechanics reimplemented from openfrontio/OpenFrontIO (AGPL-3.0) per
-   openfront_env_spec.md, source anchor commit fc50009af1fb, 18 Aug 2026.
-   Rules and constants are not copyrightable expression; this is not a
-   transliteration. Credit: OpenFront.io.
-
-   Phase 0/1 standalone prototype. Every piece of simulation state lives in
-   struct Env; nothing is file-static except pure compile-time-shaped helpers
-   and the test scaffolding. That is the precondition for PufferLib, which
-   steps thousands of envs under `#pragma omp parallel for` (src/pufferl.cu),
-   so a single shared array or generation counter would corrupt silently and
-   nondeterministically.
-
-   build:
-     gcc -g -O0 -Wall -Wextra -DDEBUG -fsanitize=address,undefined proto.c -o proto_dbg -lm
-     gcc -O2 -Wall -Wextra proto.c -o proto_fast -lm
-   -lm is required (powf). -DDEBUG is load-bearing: without it run_tests() and
-   check_borders() compile to nothing and the program passes silently. */
-
 
 #define W 48
 #define H 48
 #define N (W*H)
-#define MAXP 9            /* players 1..8; 0 = terra nullius */
+#define MAXP 9
 #define MAXATK 32
 
-/* Was 8*N (18432). Measured peak across 300 episodes was 278 entries, and the
-   structural bound is 4N (a tile is enqueued once per attacker-owned
-   4-neighbor) but only if a single attack owns the entire map frontier. 8*N
-   put sizeof(Env) at 5.1 MB, which is not viable when PufferLib allocates one
-   Env per agent slot up front. 2048 keeps ~4.7x headroom over the peak
-   measured across 3000 scripted-bot episodes (440); heap_full_drops counts any
-   push refused at cap so a cap hit is loud instead of a silently truncated
-   frontier. The scripted-bot peak is a floor, not a bound: a trained policy
-   that sprawls thin holds longer frontiers, so re-read heap_peak in Phase 2
-   before treating this as settled. */
 #define HEAPCAP 2048
 
-#define ANNEX_PERIOD 20              /* source ticksPerClusterCalc */
-#define SPAWN_TILES  49              /* radius-4 Euclidean disk, matches source's ~49 */
-#define WIPE_TILES   (SPAWN_TILES/3) /* rescaled dead-defender threshold, spec 14 */
-#define ANNEX_TILES  WIPE_TILES      /* rescaled always-check threshold, spec 9 */
+#define ANNEX_PERIOD 20
+#define SPAWN_TILES  49
+#define WIPE_TILES   (SPAWN_TILES/3)
+#define ANNEX_TILES  WIPE_TILES
 
 #define SPAWN_RADIUS   4
-#define SPAWN_MIN_DIST 13    /* Manhattan between centers, scaled to 48x48 */
+#define SPAWN_MIN_DIST 13
 #define SPAWN_TRIES    1000
-#define SPAWN_RELAX    750   /* min-distance dropped after this many attempts */
+#define SPAWN_RELAX    750
 
-/* Source values. These are coupled to the +50000 floor in max_troops (spec 14
-   item 2): start troops were previously 1000 with the floor left as written,
-   which is the one indefensible combination — the bot expand/reserve gates key
-   off max_troops, the floor dominates it at 48x48, and bots spawned unable to
-   afford their first attack (mean tick of first attack 106 vs 7). Restored to
-   source. If the floor is ever rescaled, these two move with it in the same
-   commit. */
 #define START_TROOPS_HUMAN 25000.0f
 #define START_TROOPS_BOT   10000.0f
 
-/* ---------------- types ---------------- */
+// types
 
 typedef struct {
     int tiles[N];
@@ -101,12 +69,12 @@ typedef struct {
 } Attack;
 
 typedef struct {
-    int attack_rate;      /* ticks between decisions, 40..79 */
-    int attack_off;       /* phase offset, 0..attack_rate-1 */
-    float trigger_ratio;  /* 0.50..0.59 */
-    float reserve_ratio;  /* 0.30..0.39 */
-    float expand_ratio;   /* 0.10..0.19 */
-    int neighbors_tn;     /* starts 1, cleared permanently when no TN left */
+    int attack_rate;
+    int attack_off;
+    float trigger_ratio;
+    float reserve_ratio;
+    float expand_ratio;
+    int neighbors_tn;
 } Bot;
 
 typedef struct Log Log;
@@ -142,25 +110,15 @@ struct Env {
     int steps;
     int agent_is_bot;
 
-    /* map */
-    unsigned char  terrain[N];   /* 0 water, 1 plains, 2 highland, 3 mountain */
-    unsigned short owner[N];     /* 0 = terra nullius, else player id */
+    unsigned char  terrain[N];
+    unsigned short owner[N];
     int  land_tiles;
     long ticks;
 
-
     Player players[MAXP];
 
-    /* Player type. Source has Human / Nation / Bot; we hardcode two (spec 13).
-       Every seat is a Bot until the agent seat flips one to 0. Four handicaps
-       read it: max_troops/3, growth x0.5, terra-nullius attacker loss mag/10
-       vs mag/5, and the human-attacking-bot mag *= 0.7 modifier. */
     unsigned char is_bot[MAXP];
 
-    /* Annexation scheduling (spec 9). last_calc carries a per-seat offset so
-       the cluster scan cost spreads across ticks instead of spiking on one;
-       last_tile_change is the cheap-out that skips players whose territory has
-       not moved since their last scan. */
     long last_calc[MAXP];
     long last_tile_change[MAXP];
 
@@ -168,11 +126,6 @@ struct Env {
     Bot    bots[MAXP];
     int    spawn_center[MAXP];
 
-    /* Annexation scratch. Two independent generation counters, deliberately:
-       annex_remove runs INSIDE annex_tick's component loop, so sharing one
-       counter between the border-component enumeration and the territory fill
-       corrupts the enumeration mid-iteration. Both DFS stacks are bounded by N
-       only because tiles are marked visited before push. */
     unsigned int cl_visited[N];
     unsigned int cl_gen;
     int cl_stack[N];
@@ -185,16 +138,15 @@ struct Env {
     int ff_stack[N];
     int ff_take[N];
 
-    /* per-env counters (were file-static; under OMP those would race) */
     long annex_events;
-    long annex_by[MAXP];      /* per-capturer, so the Log can attribute */
+    long annex_by[MAXP];
     long annex_tiles_moved;
     long spawn_failures;
     long heap_full_drops;
     int  heap_peak;
 };
 
-/* ---------------- pure helpers (no env state) ---------------- */
+// helpers
 
 static int ref(int x, int y) { return y*W + x; }
 static int rx(int r) { return r % W; }
@@ -206,7 +158,6 @@ static float within(float v, float lo, float hi) {
     return v;
 }
 
-/* N, S, W, E — the order source uses everywhere. Returns count. */
 static int neighbors(int r, int *out) {
     int n = 0;
     if (ry(r) != 0)   out[n++] = r-W;
@@ -216,9 +167,6 @@ static int neighbors(int r, int *out) {
     return n;
 }
 
-/* 8-connectivity, annexation cluster fill only (source
-   forEachNeighborWithDiag). Offset arithmetic rather than the obvious dx/dy
-   double loop calling ref(): that loop measured 9% of total throughput. */
 static int neighbors8(int r, int *out) {
     int x = r % W, y = r / W, n = 0;
     int up = (y != 0), dn = (y != H-1), lf = (x != 0), rt = (x != W-1);
@@ -234,17 +182,9 @@ static int on_map_edge(int t) {
     return x == 0 || x == W-1 || y == 0 || y == H-1;
 }
 
-/* ---------------- rng ---------------- */
+// rng
 
-/* xorshift32 (13, 17, 5): one full cycle of 2^32-1 over the nonzero states.
-   Chosen for cost, not quality — three shifts and three xors, no multiply, no
-   memory traffic. This is jitter for map blobs and bot personalities, not
-   Monte Carlo. */
 static void rng_seed(Env *e, unsigned int s) {
-    /* PufferLib assigns env->rng = env index before puf_init, so seat 0 would
-       get 0 — the xorshift fixed point, and 1,2,3... are adjacent states whose
-       early output is correlated. Scramble first (splitmix32 finalizer), then
-       coerce zero. */
     s ^= s >> 16; s *= 0x7feb352du;
     s ^= s >> 15; s *= 0x846ca68bu;
     s ^= s >> 16;
@@ -260,27 +200,17 @@ static unsigned int rng_next(Env *e) {
     return x;
 }
 
-/* uniform in [0, n), n > 0. Modulo bias is ~n/2^32, about 1e-8 for n <= 48. */
 static int rng_below(Env *e, int n) {
     return (int)(rng_next(e) % (unsigned int)n);
 }
 
-/* Matches source PseudoRandom.nextInt(min, max): min INCLUSIVE, max EXCLUSIVE
-   (PseudoRandom.ts computes floor(next()*(hi-lo))+lo). Keeping the exclusive
-   convention here means every nextInt(a, b) in the TS transcribes to
-   rng_int(a, b) argument-for-argument — never adjust arguments while
-   transcribing. Call sites below are verbatim from source. */
 static int rng_int(Env *e, int lo, int hi) {
-    if (hi <= lo) return lo;   /* nextInt(0,0) is 0 in JS; avoid mod-by-zero */
+    if (hi <= lo) return lo;
     return lo + rng_below(e, hi - lo);
 }
 
-/* ---------------- map ---------------- */
+// map
 
-/* Source distinguishes isOceanShore (ocean bit) from isShore (shoreline bit).
-   We have neither — one water value, no lakes — so both collapse to "land tile
-   touching water". Spec 13 files this: once real map gen creates lakes the two
-   predicates separate and annexation behaviour changes. */
 static int is_shore(Env *e, int t) {
     if (e->terrain[t] == 0) return 0;
     int nb[4];
@@ -334,7 +264,7 @@ static void print_owner(Env *e) {
     }
 }
 
-/* ---------------- tile set ---------------- */
+// tileset
 
 static void ts_init(TileSet *s) {
     s->count = 0;
@@ -360,12 +290,10 @@ static void ts_remove(TileSet *s, int t) {
 
 static int ts_has(TileSet *s, int t) { return s->pos[t] != -1; }
 
-/* ---------------- heap ---------------- */
+// heap
 
 static void heap_init(Heap *h) { h->count = 0; }
 
-/* TILE FIRST, PRIORITY SECOND. int and float convert silently in both
-   directions, so a transposition compiles clean and means nothing. */
 static void heap_push(Env *e, Heap *h, int t, float p) {
     if (h->count >= HEAPCAP) { e->heap_full_drops++; return; }
     int i = h->count++;
@@ -414,7 +342,7 @@ static int heap_pop(Heap *h) {
     return best;
 }
 
-/* ---------------- territory ---------------- */
+// territory
 
 static void update_border(Env *e, int t) {
     int p = e->owner[t];
@@ -431,11 +359,8 @@ static void update_border(Env *e, int t) {
     else           ts_remove(&e->players[p].border, t);
 }
 
-/* The only territory mutation point. Five tiles touched, no rescans. */
 static void conquer(Env *e, int p, int t) {
 #ifdef DEBUG
-    /* source throws on water/impassable; every sim caller already filters, so
-       this only exists to catch a caller that stops filtering */
     if (e->terrain[t] == 0) {
         printf("CONQUER WATER: p%d tile %d\n", p, t);
         exit(1);
@@ -451,12 +376,6 @@ static void conquer(Env *e, int p, int t) {
 
     e->owner[t] = p;
     ts_add(&e->players[p].tiles, t);
-    /* alive is a cached "owns at least one tile" (source isAlive() is exactly
-       numTilesOwned() > 0), kept as a field only so player_tick/bot_tick/
-       annex_tick can skip dead seats. Maintained in BOTH directions here,
-       which is the only place territory moves — clearing it on loss alone left
-       it wrong, and annexation can empty a player without ever going through
-       attack_tick. */
     e->players[p].alive = 1;
 
     update_border(e, t);
@@ -479,20 +398,14 @@ static void players_reset(Env *e) {
         e->players[p].troops = 0.0f;
         e->players[p].alive  = 0;   /* nobody owns tiles until spawn_place runs */
         e->is_bot[p]         = 1;
-        /* source: lastCalc = ticks + simpleHash(id) % ticksPerClusterCalc.
-           Any fixed spread works; this one is deterministic per seat. */
         e->last_calc[p]        = (long)(p * 7 % ANNEX_PERIOD);
         e->last_tile_change[p] = 0;
     }
     memset(e->owner, 0, sizeof(e->owner));
 }
 
-/* ---------------- economy (spec 8) ---------------- */
+// economy
 
-/* The +50000 floor is spec 14 item 2, NOT applied — implemented as written so
-   weird balance stays attributable to the constant rather than to the code. It
-   dominates at 48x48 (tiles^0.6*1000 is ~10k at spawn size), which is exactly
-   why start troops are coupled to it. */
 static float max_troops(Env *e, int p) {
     float tiles = (float)e->players[p].tiles.count;
     float m = 2.0f * (powf(tiles, 0.6f) * 1000.0f + 50000.0f);
@@ -508,9 +421,6 @@ static void player_tick(Env *e, int p) {
     if (!e->players[p].alive) return;
     float max = max_troops(e, p);
     float troops = e->players[p].troops;
-    /* source order: base rate, then the capacity ratio, then the bot handicap.
-       The ratio goes negative when max shrinks below current troops (territory
-       loss), which is load-bearing — troops decay toward the new cap. */
     float add = 10.0f + powf(troops, 0.73f) / 4.0f;
     add *= (1.0f - troops / max);
     if (e->is_bot[p]) add *= 0.5f;
@@ -519,7 +429,7 @@ static void player_tick(Env *e, int p) {
     e->players[p].troops = troops;
 }
 
-/* ---------------- attack ---------------- */
+// attack
 
 static int find_free_slot(Env *e) {
     for (int i = 0; i < MAXATK; i++)
@@ -527,10 +437,6 @@ static int find_free_slot(Env *e) {
     return -1;
 }
 
-/* Conquest priority (spec 6), computed at ENQUEUE time using the tick counter
-   at enqueue. numOwnedByMe >= 2 on plains drives the multiplier <= 0, so
-   pockets and concavities fill first and fronts smooth out. + ticks makes
-   older enqueues win ties across ticks. */
 static void atk_push(Env *e, Attack *a, int t) {
     float mag;
     if      (e->terrain[t] == 1) mag = 1.0f;
@@ -548,8 +454,6 @@ static void atk_push(Env *e, Attack *a, int t) {
     heap_push(e, &a->heap, t, pri);
 }
 
-/* Order is load-bearing: deduct -> cancel -> combine -> find slot -> assign.
-   Both loops mutate the local `troops`, and combination can free a slot. */
 static void attack_start(Env *e, int attacker, int target, float troops) {
     if (attacker == target) return;
 
@@ -557,8 +461,6 @@ static void attack_start(Env *e, int attacker, int target, float troops) {
     if (troops < 1.0f) return;
     e->players[attacker].troops -= troops;
 
-    /* Cancellation (spec 5.4): mutual attacks annihilate pairwise, larger
-       survives with the difference. */
     for (int i = 0; i < MAXATK; i++) {
         if (!e->attacks[i].active) continue;
         if (e->attacks[i].attacker != target || e->attacks[i].target != attacker) continue;
@@ -568,15 +470,9 @@ static void attack_start(Env *e, int attacker, int target, float troops) {
         }
         troops -= e->attacks[i].troops;
         e->attacks[i].active = 0;
-        /* not cosmetic: without it a later mutual match does
-           attacks[i].troops -= troops with negative troops, which ADDS troops
-           to the enemy attack */
         if (troops <= 0.0f) return;
     }
 
-    /* Combination (spec 5.5): a second outgoing attack on the same target
-       absorbs the first. This is what supplies troop commitment for the action
-       space, so it is a prerequisite rather than a fidelity nicety. */
     for (int i = 0; i < MAXATK; i++) {
         if (!e->attacks[i].active) continue;
         if (e->attacks[i].attacker != attacker || e->attacks[i].target != target) continue;
@@ -588,8 +484,6 @@ static void attack_start(Env *e, int attacker, int target, float troops) {
 
     int i = find_free_slot(e);
     if (i < 0) {
-        /* Deliberate divergence: source has an unbounded attack list. Refund
-           rather than leak, since the deduction happened at the top. */
         e->players[attacker].troops += troops;
 #ifdef DEBUG
         printf("attack_start: no free slot (a=%d t=%d troops=%.1f)\n",
@@ -606,9 +500,6 @@ static void attack_start(Env *e, int attacker, int target, float troops) {
 
     heap_init(&a->heap);
 
-    /* Seed via refresh: walk ALL the attacker's border tiles and enqueue every
-       4-neighbor that is target-owned passable land. One Attack = one
-       (attacker, target) pair spanning every shared front. */
     TileSet *b = &e->players[attacker].border;
     for (int j = 0; j < b->count; j++) {
         int t = b->tiles[j];
@@ -621,11 +512,6 @@ static void attack_start(Env *e, int attacker, int target, float troops) {
     }
 }
 
-/* handleDeadDefender: fires after every conquest against a player under the
-   threshold, transferring their ENTIRE remaining territory. Iterates the
-   target's TileSet DESCENDING — ts_remove swaps the last element into the
-   freed slot, so descending means that element is already visited; ascending
-   skips unvisited tiles. */
 static void dead_defender(Env *e, int attacker, int target) {
     if (target == 0) return;
 
@@ -651,35 +537,26 @@ static void dead_defender(Env *e, int attacker, int target) {
 }
 
 static void attack_tick(Env *e, Attack *a) {
-    /* Budget computed ONCE per tick. frontier proxy is heap.count, which
-       overcounts lazy-deleted duplicates; the exact per-attack TileSet is a
-       standing Phase 2 decision. */
     float frontier = (float)a->heap.count + rng_int(e, 0, 5);
     float budget;
     if (a->target == 0) {
         budget = frontier * 2.0f;
     } else {
         float def = e->players[a->target].troops;
-        /* JS divides by zero to Infinity and clamps to 0.5; C would be UB, so
-           branch straight to the 0.5 arm */
         if (def <= 0.0f) budget = 0.5f * frontier * 3.0f;
         else budget = within((5.0f*a->troops / def) * 2.0f, 0.01f, 0.5f) * frontier * 3.0f;
     }
 
     while (budget > 0.0f) {
-        /* checked at the TOP of each iteration: attack dies, nothing returned */
         if (a->troops < 1.0f) { a->active = 0; return; }
 
         int t = heap_pop(&a->heap);
         if (t < 0) {
-            /* heap empty -> retreat: survivors returned, no malus for
-               auto-exhaustion. Distinct from the troops<1 death above. */
             e->players[a->attacker].troops += a->troops;
             a->active = 0;
             return;
         }
 
-        /* validity checks, none consuming budget — the lazy-deletion payoff */
         if (e->owner[t] != a->target) continue;
         if (e->terrain[t] == 0) continue;
         int nb[4];
@@ -690,7 +567,6 @@ static void attack_tick(Env *e, Attack *a) {
         }
         if (!on_border) continue;
 
-        /* addNeighbors happens BEFORE the conquest (source order) */
         for (int k = 0; k < n; k++) {
             if (e->owner[nb[k]] == a->target && e->terrain[nb[k]] != 0)
                 atk_push(e, a, nb[k]);
@@ -703,13 +579,9 @@ static void attack_tick(Env *e, Attack *a) {
 
         float atk_loss, cost;
         if (a->target == 0) {
-            /* Bot attackers pay half the terra nullius toll. Terra nullius is
-               not a Bot, so the 0.7 modifier below never applies here. */
             atk_loss = e->is_bot[a->attacker] ? mag / 10.0f : mag / 5.0f;
             cost = within(2000.0f * (speed > 10.0f ? speed : 10.0f) / a->troops, 5.0f, 100.0f);
         } else {
-            /* Human/Nation attacking a Bot takes 30% less loss. Both sides must
-               be players, which is why this sits inside the vs-player branch. */
             if (!e->is_bot[a->attacker] && e->is_bot[a->target]) mag *= 0.7f;
 
             float def_troops = e->players[a->target].troops;
@@ -719,8 +591,6 @@ static void attack_tick(Env *e, Attack *a) {
             float alt_loss = 1.3f * def_loss * (mag / 100.0f);
             atk_loss = 0.6f*cur_loss + 0.4f*alt_loss;
             cost = within(def_troops / (5.0f * a->troops), 0.2f, 1.5f) * speed;
-            /* source removeTroops clamps at zero; powf(negative, 0.73) in
-               player_tick would be NaN otherwise */
             e->players[a->target].troops -= def_loss;
             if (e->players[a->target].troops < 0.0f) e->players[a->target].troops = 0.0f;
         }
@@ -734,37 +604,8 @@ static void attack_tick(Env *e, Attack *a) {
     }
 }
 
-/* ---------------- annexation (spec 9) ----------------
+// annexation
 
-   Source: PlayerExecution.removeClusters. Three things differ from what an
-   earlier draft of the spec said:
-
-   1. THE INSCRIPTION TEST IS THE OTHER WAY AROUND. Util.inscribed(outer, inner)
-      is called as inscribed(enemyBox, clusterBox), so the ENEMY bounding box
-      must CONTAIN the cluster's, not the reverse. Under the reverse reading the
-      rule can never fire: a ring of enemy tiles enclosing a cluster always
-      extends one tile past it on every side. The correct reading is what makes
-      the rule mean "the enemy wraps around us."
-
-   2. removeCluster gates on isEnclosed(firstTile) before transferring anything.
-      The surround checks look at one border component, but the fill hands over
-      the whole territory that component sits on. Every hole in a territory
-      gives it another border component, so a cluster wrapped around a hole in
-      the middle of a wide-open empire passes the surround test; without this
-      gate that empire changes hands.
-
-   3. isOceanShore (largest-cluster rule) and isShore (every other cluster)
-      collapse to one predicate here — no lakes, no shoreline bit.
-
-   Cost is O(border), not O(territory): the cluster fill walks only the
-   player's border set, and last_tile_change skips players who haven't moved.
-   A territory with a hole is ONE connected territory but TWO border components
-   (outer perimeter and the rim of the hole), which is exactly the distinction
-   the rule needs. */
-
-/* largest != 0 selects surroundedBySamePlayer (every 4-neighbor owned, exactly
-   one distinct enemy); otherwise isSurrounded (unowned neighbors allowed, any
-   number of enemies). Both require the enemy box to contain the cluster box. */
 static int annex_surrounded(Env *e, int p, const int *tiles, int n, int largest) {
     int cminx = W, cmaxx = -1, cminy = H, cmaxy = -1;
     int eminx = W, emaxx = -1, eminy = H, emaxy = -1;
@@ -789,7 +630,7 @@ static int annex_surrounded(Env *e, int p, const int *tiles, int n, int largest)
             int o = e->owner[u];
             if (o == p) continue;
             if (o == 0) {
-                if (largest) return 0;   /* unowned neighbor breaks full surround */
+                if (largest) return 0;
                 continue;
             }
             if (!seen[o]) { seen[o] = 1; distinct++; }
@@ -799,9 +640,6 @@ static int annex_surrounded(Env *e, int p, const int *tiles, int n, int largest)
             if (uy < eminy) eminy = uy;
             if (uy > emaxy) emaxy = uy;
         }
-        /* source re-checks enemies.size !== 1 after EVERY tile, so a second
-           distinct enemy aborts early rather than at the end — cheaper and
-           identical in result */
         if (largest && distinct != 1) return 0;
     }
 
@@ -811,10 +649,6 @@ static int annex_surrounded(Env *e, int p, const int *tiles, int n, int largest)
     return eminx <= cminx && eminy <= cminy && emaxx >= cmaxx && emaxy >= cmaxy;
 }
 
-/* Can the territory reachable from start escape to water or the map edge,
-   walking our own tiles AND unclaimed land but not other players'? Unclaimed
-   land is walked through, not treated as an exit — a crater inside our land is
-   a hole, not a way out. */
 static int annex_enclosed(Env *e, int p, int start) {
     e->ff_gen++;
     if (e->ff_gen == 0) { memset(e->ff_visited, 0, sizeof(e->ff_visited)); e->ff_gen = 1; }
@@ -832,8 +666,8 @@ static int annex_enclosed(Env *e, int p, int start) {
             int u = nb[j];
             if (e->ff_visited[u] == e->ff_gen) continue;
             int o = e->owner[u];
-            if (o != 0 && o != p) continue;                 /* someone else's tile: wall */
-            if (o == 0 && e->terrain[u] == 0) return 0;      /* open water: a way out */
+            if (o != 0 && o != p) continue;
+            if (o == 0 && e->terrain[u] == 0) return 0;
             e->ff_visited[u] = e->ff_gen;
             e->ff_stack[sp++] = u;
         }
@@ -841,21 +675,6 @@ static int annex_enclosed(Env *e, int p, int start) {
     return 1;
 }
 
-/* The enemy running the largest attack on p, restricted to enemies bordering
-   this cluster; failing that, the enemy bordering it on the most TILES.
-
-   cnt[] counts distinct cluster tiles touched, not adjacencies: a cluster tile
-   with two of its four neighbours owned by q is one bordering tile, not two.
-   Counting adjacencies would let a q that wraps a few tiles tightly outrank a
-   q that touches more of the cluster along a flat front. Same defect class as
-   the nb_shared bug in compute_observations -- the (tile, neighbour) pair is
-   the natural loop unit and the wrong counting unit.
-
-   The dedupe cannot change the attack-branch gate below, which only tests
-   cnt[attacker] == 0, and zero-vs-nonzero is unaffected.
-
-   Deliberate divergence: ties break by player id rather than cluster-traversal
-   order, which is an artifact. */
 static int annex_capturer(Env *e, int p, const int *tiles, int n) {
     int cnt[MAXP];
     memset(cnt, 0, sizeof(cnt));
@@ -867,7 +686,7 @@ static int annex_capturer(Env *e, int p, const int *tiles, int n) {
         for (int j = 0; j < k; j++) {
             int o = e->owner[nb[j]];
             if (o == 0 || o == p) continue;
-            int dup = 0;                       /* already counted for this tile? */
+            int dup = 0;
             for (int m = 0; m < j; m++)
                 if (e->owner[nb[m]] == o) { dup = 1; break; }
             if (dup) continue;
@@ -897,7 +716,6 @@ static int annex_capturer(Env *e, int p, const int *tiles, int n) {
 }
 
 static void annex_remove(Env *e, int p, const int *tiles, int n) {
-    /* an earlier removal this tick may already have taken these tiles */
     for (int i = 0; i < n; i++)
         if (e->owner[tiles[i]] != p) return;
 
@@ -926,8 +744,6 @@ static void annex_remove(Env *e, int p, const int *tiles, int n) {
         }
     }
 
-    /* collect first, conquer second — the fill's include-test reads owner, and
-       conquering inside the loop terminates it early against its own results */
     for (int i = 0; i < ntake; i++) conquer(e, cap, e->ff_take[i]);
 
     e->annex_events++;
@@ -948,7 +764,6 @@ static void annex_tick(Env *e, int p) {
     e->cl_gen++;
     if (e->cl_gen == 0) { memset(e->cl_visited, 0, sizeof(e->cl_visited)); e->cl_gen = 1; }
 
-    /* 8-connected components of the BORDER SET */
     int ncomp = 0, ntot = 0;
     for (int i = 0; i < b->count; i++) {
         int s = b->tiles[i];
@@ -992,10 +807,8 @@ static void annex_tick(Env *e, int p) {
     }
 }
 
-/* ---------------- scripted bot driver (spec 11) ---------------- */
+// bots
 
-/* All randInt here are nextInt, i.e. max EXCLUSIVE: attack_rate 40..79,
-   trigger 0.50..0.59, reserve 0.30..0.39, expand 0.10..0.19. */
 static void bots_init(Env *e) {
     for (int i = 1; i < MAXP; i++) {
         e->bots[i].attack_rate   = rng_int(e, 40, 80);
@@ -1042,9 +855,6 @@ static int bordering_players(Env *e, int p, int *out) {
     return count;
 }
 
-/* Largest active attack aimed at p, returning its attacker (0 if none).
-   Non-bots ignore bot attackers (findIncomingAttackPlayer); bots count
-   everyone. Only bots call this today, but the agent seat will. */
 static int largest_incoming_attacker(Env *e, int p) {
     int best = 0;
     float best_troops = 0.0f;
@@ -1060,15 +870,11 @@ static int largest_incoming_attacker(Env *e, int p) {
     return best;
 }
 
-/* attackRandomTarget. The trigger gate comes FIRST — source calls
-   hasTriggerRatioTroops at the top and returns, so "forced" retaliation only
-   skips shouldAttack, which returns true unconditionally for a Bot attacker
-   and is therefore a no-op. Do not read force=true as bypassing the gate. */
 static void bot_attack_random(Env *e, int p) {
     if (e->players[p].troops < e->bots[p].trigger_ratio * max_troops(e, p)) return;
 
     float send = e->players[p].troops - max_troops(e, p) * e->bots[p].reserve_ratio;
-    if (send < 1.0f) return;   /* sendAttack fails identically for every target */
+    if (send < 1.0f) return;
 
     int r = largest_incoming_attacker(e, p);
     if (r != 0) {
@@ -1080,15 +886,12 @@ static void bot_attack_random(Env *e, int p) {
     int count = bordering_players(e, p, cand);
     if (count == 0) return;
 
-    /* shuffleArray (Fisher-Yates), then take the first candidate that goes
-       through */
     for (int i = count - 1; i > 0; i--) {
         int j = rng_below(e, i + 1);
         int tmp = cand[i]; cand[i] = cand[j]; cand[j] = tmp;
     }
     for (int i = 0; i < count; i++) {
         int q = cand[i];
-        /* chance(2): 50% skip per Human/Nation candidate; bots always attackable */
         if (!e->is_bot[q] && rng_below(e, 2) == 0) continue;
         attack_start(e, p, q, send);
         return;
@@ -1106,9 +909,6 @@ static void bot_tick(Env *e, int p) {
                 attack_start(e, p, 0, send);
                 return;
             }
-            /* too poor to expand: source FALLS THROUGH to attackRandomTarget
-               rather than burning the decision tick. An early return here
-               silently halves bot activity. */
         } else {
             e->bots[p].neighbors_tn = 0;   /* cleared permanently, then fall through */
         }
@@ -1116,7 +916,7 @@ static void bot_tick(Env *e, int p) {
     bot_attack_random(e, p);
 }
 
-/* ---------------- win condition (spec 10) ---------------- */
+// win condition
 
 static int win_check(Env *e) {
     int best = 0;
@@ -1131,7 +931,7 @@ static int win_check(Env *e) {
     return 0;
 }
 
-/* ---------------- spawn placement (spec 12) ---------------- */
+// spawn placement
 
 static int spawn_disk_ok(Env *e, int cx, int cy) {
     for (int dy = -SPAWN_RADIUS; dy <= SPAWN_RADIUS; dy++) {
@@ -1147,8 +947,6 @@ static int spawn_disk_ok(Env *e, int cx, int cy) {
     return 1;
 }
 
-/* Returns 1 on success. Filter order is cheap-first; the 81-cell disk check
-   runs last. */
 static int spawn_place(Env *e, int p) {
     for (int attempt = 0; attempt < SPAWN_TRIES; attempt++) {
         int cx = rng_below(e, W), cy = rng_below(e, H);
@@ -1156,16 +954,11 @@ static int spawn_place(Env *e, int p) {
 
         if (e->terrain[c] == 0 || e->owner[c] != 0) continue;
 
-        /* source rejects border tiles; for an unowned tile that means any
-           4-neighbor already belongs to someone */
         int nb[4];
         int n = neighbors(c, nb), touching = 0;
         for (int k = 0; k < n; k++) if (e->owner[nb[k]] != 0) { touching = 1; break; }
         if (touching) continue;
 
-        /* min-distance is a preference, not a constraint: dropped after
-           SPAWN_RELAX so a cramped map degrades to packed spawns instead of
-           hanging. Source does the same. */
         if (attempt < SPAWN_RELAX) {
             int too_close = 0;
             for (int q = 1; q < MAXP; q++) {
@@ -1192,23 +985,18 @@ static int spawn_place(Env *e, int p) {
     return 0;
 }
 
-/* ---------------- episode lifecycle ---------------- */
+// episode lifecycle
 
-/* Resets everything an episode owns. Does NOT touch the rng state (the stream
-   continues across episodes) and does NOT clear the cross-episode counters. */
 static void sim_reset(Env *e) {
-    /* BEFORE spawn_place, not after: conquer stamps last_tile_change with the
-       tick counter, and a leftover value from the previous episode would make
-       every player look freshly-changed on tick 0 */
     e->ticks = 0;
-    fill_terrain(e);                /* fresh map per episode */
+    fill_terrain(e);
     players_reset(e);
     bots_init(e);
     for (int i = 0; i < MAXATK; i++) e->attacks[i].active = 0;
     for (int p = 0; p < MAXP; p++) e->spawn_center[p] = -1;
 
     for (int p = 1; p < MAXP; p++) {
-        if (!spawn_place(e, p)) {   /* no room left: player sits out this episode */
+        if (!spawn_place(e, p)) {
             e->players[p].alive = 0;
             e->spawn_failures++;
             continue;
@@ -1217,8 +1005,6 @@ static void sim_reset(Env *e) {
     }
 }
 
-/* Zeroes an Env completely. Call once before first use; sim_reset is the
-   per-episode entry point. */
 static void sim_init(Env *e, unsigned int seed) {
     memset(e, 0, sizeof(*e));
     rng_seed(e, seed);
@@ -1232,21 +1018,14 @@ static void check_borders(Env *e);
 #define check_borders(e) ((void)0)
 #endif
 
-/* One tick, in spec 2 order. Returns the winner (0 if none) so callers can
-   stop; win check runs every 10 ticks as in source. */
 static int sim_tick(Env *e) {
     e->ticks++;
-    /* Seats 1..num_agents are policy-controlled through apply_action; the
-       scripted driver must not co-drive them. num_agents is 0 in the
-       standalone harness (sim_init memsets the Env), so bot-only runs are
-       unchanged. */
     for (int p = 1; p < MAXP; p++) {
         if (p <= e->num_agents) continue;
         bot_tick(e, p);
     }
     for (int i = 0; i < MAXATK; i++)
         if (e->attacks[i].active) attack_tick(e, &e->attacks[i]);
-    /* spec 2: per player, troop growth THEN the annexation check */
     for (int p = 1; p < MAXP; p++) { player_tick(e, p); annex_tick(e, p); }
     if (e->ticks % 50 == 0) check_borders(e);
     if (e->ticks % 10 == 0) return win_check(e);
@@ -1258,7 +1037,7 @@ static void sim_run(Env *e, int nticks) {
         if (sim_tick(e)) return;
 }
 
-/* ---------------- invariant checks (debug builds only) ---------------- */
+// invariant checks (debug builds only)
 
 #ifdef DEBUG
 static void ts_check(TileSet *s) {
@@ -1291,8 +1070,6 @@ static void check_borders(Env *e) {
                 exit(1);
             }
         }
-        /* alive must track tile ownership exactly: annexation can empty a
-           player through a path that does not go via attack_tick */
         if ((e->players[p].tiles.count == 0) != (e->players[p].alive == 0)) {
             printf("ALIVE BROKEN: p%d tiles=%d alive=%d\n",
                    p, e->players[p].tiles.count, e->players[p].alive);
@@ -1310,12 +1087,10 @@ static void check_borders(Env *e) {
 }
 #endif
 
-/* ---------------- tests (debug builds only) ---------------- */
+// tests (debug builds only)
 
 #ifdef DEBUG
 
-/* Tests own their Env explicitly. Heap-allocated because sizeof(Env) is large
-   enough that a stack local would blow the default stack. */
 static Env *test_env(unsigned int seed) {
     Env *e = (Env*)malloc(sizeof(Env));
     if (!e) { printf("test_env: out of memory\n"); exit(1); }
@@ -1356,7 +1131,7 @@ static void ts_test(void) {
 
 static void conquer_test(void) {
     Env *e = test_env(1);
-    memset(e->terrain, 1, sizeof(e->terrain));   /* guard in conquer rejects water */
+    memset(e->terrain, 1, sizeof(e->terrain));
     players_reset(e);
     for (int step = 0; step < 50000; step++) {
         int p = 1 + rand() % (MAXP - 1);
@@ -1384,8 +1159,6 @@ static void blob_test(void) {
     memset(e->terrain, 1, sizeof(e->terrain));
     players_reset(e);
 
-    /* solid 12x12 rectangles so interior (non-border) tiles actually exist —
-       catches a missing interior ts_remove in update_border */
     for (int p = 1; p <= 4; p++) {
         int ox = (p % 2) * 20 + 4, oy = (p / 3) * 20 + 4;
         fill_rect(e, p, ox, oy, 12, 12);
@@ -1397,8 +1170,6 @@ static void blob_test(void) {
         exit(1);
     }
 
-    /* chew a 3x3 hole in the middle of p1 — catches a missing neighbor-update
-       loop in conquer */
     fill_rect(e, 5, 28, 8, 3, 3);
     check_borders(e);
     if (e->players[1].tiles.count != 135 || e->players[1].border.count != 56) {
@@ -1453,7 +1224,6 @@ static void heap_test(void) {
     free(e);
 }
 
-/* Forces the schedule so annex_tick actually runs this call. */
 static void annex_force(Env *e, int p) {
     e->last_calc[p] = 0;
     e->last_tile_change[p] = e->ticks;
@@ -1462,9 +1232,8 @@ static void annex_force(Env *e, int p) {
 
 static void annex_test(void) {
     Env *e = test_env(4);
-    memset(e->terrain, 1, sizeof(e->terrain));   /* all land: isolate the geometry */
+    memset(e->terrain, 1, sizeof(e->terrain));
 
-    /* --- positive: p2 is a 3x3 enclave inside p1's 12x12 --- */
     players_reset(e);
     e->ticks = 100;
     fill_rect(e, 1, 10, 10, 12, 12);
@@ -1494,7 +1263,6 @@ static void annex_test(void) {
         exit(1);
     }
 
-    /* p1's own outer ring must survive the same pass: it is not surrounded */
     annex_force(e, 1);
     check_borders(e);
     if (e->players[1].tiles.count != 144) {
@@ -1503,7 +1271,6 @@ static void annex_test(void) {
         exit(1);
     }
 
-    /* --- negative: two blobs sharing one front, neither is enclosed --- */
     players_reset(e);
     e->ticks = 100;
     fill_rect(e, 1, 10, 10, 12, 12);
@@ -1530,7 +1297,7 @@ static void annex_test(void) {
 
 static void attack_test(void) {
     Env *e = test_env(5);
-    memset(e->terrain, 1, sizeof(e->terrain));   /* flat map: no terrain confound */
+    memset(e->terrain, 1, sizeof(e->terrain));
     e->land_tiles = N;
     players_reset(e);
     bots_init(e);
@@ -1555,10 +1322,6 @@ static void attack_test(void) {
     free(e);
 }
 
-/* Two envs stepped interleaved must produce bit-identical results to the same
-   two envs stepped separately. This is the test the refactor exists for: any
-   surviving file-static map, counter, or generation stamp shows up here and
-   nowhere else. */
 static unsigned long env_hash(Env *e) {
     unsigned long h = 1469598103934665603UL;
     for (int t = 0; t < N; t++) {
@@ -1586,7 +1349,6 @@ static void isolation_test(void) {
     static const unsigned int seeds[ISO_ENVS] = {11, 22, 33};
     unsigned long alone[ISO_ENVS];
 
-    /* each env run entirely on its own */
     for (int i = 0; i < ISO_ENVS; i++) {
         Env *e = test_env(seeds[i]);
         for (int ep = 0; ep < ISO_EPS; ep++) {
@@ -1597,8 +1359,6 @@ static void isolation_test(void) {
         free(e);
     }
 
-    /* same seeds, same episode counts, but every env advanced one tick at a
-       time in round-robin — the access pattern PufferLib's vec loop produces */
     Env *envs[ISO_ENVS];
     int ep_left[ISO_ENVS], tick_left[ISO_ENVS];
     for (int i = 0; i < ISO_ENVS; i++) {
@@ -1616,7 +1376,6 @@ static void isolation_test(void) {
                 tick_left[i]--;
                 continue;
             }
-            /* episode over (win or tick budget spent) */
             ep_left[i]--;
             if (ep_left[i] > 0) {
                 sim_reset(envs[i]);
@@ -1652,15 +1411,8 @@ static void run_tests(void) {
 static void run_tests(void) {}
 #endif
 
+// observations
 
-/* ---------------- observations ---------------- */
-
-/* Bordering players sorted DESCENDING by shared border length, ties broken by
-   ascending player id. Returns the count, capped at ACT_NEIGHBORS. The sort is
-   what makes action index k mean a consistent thing across episodes and seats;
-   absolute player ids are arbitrary labels. The dropped tail is cheap because
-   the budget formula scales on frontier (spec 7), so a neighbor touched along
-   three tiles is barely attackable anyway. */
 static int sorted_neighbors(Env *e, int p, int *out, int *shared) {
     int cnt[MAXP];
     memset(cnt, 0, sizeof(cnt));
@@ -1678,8 +1430,6 @@ static int sorted_neighbors(Env *e, int p, int *out, int *shared) {
     int n_out = 0;
     for (int q = 1; q < MAXP; q++) {
         if (cnt[q] == 0) continue;
-        /* insertion sort; at most 7 entries. Walking q ascending and shifting
-           only on strict > keeps ties in ascending id order. */
         int pos = n_out;
         while (pos > 0 && cnt[q] > shared[pos-1]) {
             out[pos]    = out[pos-1];
@@ -1693,14 +1443,11 @@ static int sorted_neighbors(Env *e, int p, int *out, int *shared) {
     return n_out > ACT_NEIGHBORS ? ACT_NEIGHBORS : n_out;
 }
 
-/* Every field is a ratio. Nothing is divided by a raw economy constant, so the
-   obs survives a spec 14 rescale of the +50000 floor and start troops, and is
-   invariant to map size. */
 static void compute_observations(Env *e) {
     for (int a = 0; a < e->num_agents; a++) {
         obs_t *obs = e->agents[a].observations;
         memset(obs, 0, OBS_SIZE * sizeof(obs_t));
-        if (e->seats[a].done) continue;   /* dead seat: all-zero, actions discarded */
+        if (e->seats[a].done) continue;
 
         int p = e->seats[a].seat;
         int idx = 0;
@@ -1716,38 +1463,23 @@ static void compute_observations(Env *e) {
 
         int nb_p[MAXP], nb_shared[MAXP];
         int n_nb = sorted_neighbors(e, p, nb_p, nb_shared);
-        /* nb_shared counts ADJACENCIES, not tiles: one border tile with all
-           four neighbours owned by q contributes 4. So the max is 4*border,
-           not border. Normalise by the total contested adjacency instead,
-           which gives each slot its share of the frontier and is what the
-           attack decision actually turns on; absolute frontier scale is
-           already carried by obs[2]. */
         int shared_total = 0;
         for (int k = 0; k < n_nb; k++) shared_total += nb_shared[k];
         obs[idx++] = (float)n_nb / ACT_NEIGHBORS;
         obs[idx++] = (float)e->steps / e->max_steps;
 
         for (int k = 0; k < ACT_NEIGHBORS; k++) {
-            if (k >= n_nb) { idx += 5; continue; }   /* memset left these zero */
+            if (k >= n_nb) { idx += 5; continue; }
             int q = nb_p[k];
-            obs[idx++] = 1.0f;                       /* valid: distinguishes
-                                                        "no neighbor" from
-                                                        "neighbor with 0 troops" */
+            obs[idx++] = 1.0f;
             obs[idx++] = shared_total ? (float)nb_shared[k] / shared_total : 0.0f;
             obs[idx++] = (float)e->players[q].tiles.count / e->land_tiles;
-            /* Log ratio, clamped to +/-4 doublings. A linear ratio saturates:
-               5x and 50x both read 1.0, and that is exactly the distinction
-               that decides whether to attack the leader or a weak neighbor
-               late game. Clamping troops to 1 first because log2f(0/x) is -inf
-               and would poison the obs with a NaN that check_borders cannot
-               see -- it inspects player troops, not observations. */
             float mine = troops > 1.0f ? troops : 1.0f;
             float thrs = e->players[q].troops > 1.0f ? e->players[q].troops : 1.0f;
             obs[idx++] = within(log2f(thrs / mine), -4.0f, 4.0f) / 8.0f + 0.5f;
-            obs[idx++] = 0.0f;                       /* incoming attack, below */
+            obs[idx++] = 0.0f;
         }
 
-        /* One pass over attacks rather than five: 32 checks, not 5*MAXATK. */
         for (int i = 0; i < MAXATK; i++) {
             if (!e->attacks[i].active || e->attacks[i].target != p) continue;
             for (int k = 0; k < n_nb; k++) {
@@ -1760,11 +1492,8 @@ static void compute_observations(Env *e) {
     }
 }
 
-/* ---------------- actions ---------------- */
+// actions
 
-/* Discrete 7: 0 noop, 1 attack terra nullius, 2..6 attack sorted neighbor 0..4.
-   Troop commitment is deliberately absent -- spec 5 combination makes a repeat
-   attack on the same target absorb the first, so action repeat supplies it. */
 static void apply_action(Env *e, int seat_idx) {
     Seat *s = &e->seats[seat_idx];
     if (s->done) return;
@@ -1775,7 +1504,7 @@ static void apply_action(Env *e, int seat_idx) {
     int action = (int)e->agents[seat_idx].actions[0];
     if (action <= 0) return;
 
-    float send = e->players[p].troops / 5.0f;   /* spec 5 attackAmount default */
+    float send = e->players[p].troops / 5.0f;
     if (send < 1.0f) return;
 
     if (action == 1) {
@@ -1787,14 +1516,10 @@ static void apply_action(Env *e, int seat_idx) {
     int n_nb = sorted_neighbors(e, p, nb_p, nb_shared);
     int k = action - 2;
     if (k < n_nb) attack_start(e, p, nb_p[k], send);
-    /* invalid slot falls through as a noop; no action mask in v1 */
 }
 
-/* ---------------- episode lifecycle ---------------- */
+// puffer lifecycle
 
-/* Flush one seat's episode into the Log. Seat 0 only: in self-play every seat
-   would otherwise write, inflating n and averaging our own agents against each
-   other (the ocean/battle pattern). */
 static void add_log(Env *e, int seat_idx) {
     if (seat_idx != 0) return;
     Seat *s = &e->seats[seat_idx];
@@ -1804,17 +1529,11 @@ static void add_log(Env *e, int seat_idx) {
     e->log.episode_return += s->episode_return;
     e->log.episode_length += s->decisions;
     e->log.win            += ((float)e->players[p].tiles.count / e->land_tiles > 0.8f);
-    e->log.annexations    += e->annex_by[p];   /* this seat's, not everyone's */
+    e->log.annexations    += e->annex_by[p];
     e->log.n              += 1.0f;
 }
 
 void puf_reset(Env *e) {
-    /* sim_reset runs FIRST and resets is_bot to all-1 (players_reset), so the
-       agent seats' type is applied after it, and their start troops -- granted
-       inside sim_reset at bot rates -- are re-granted at the real type.
-       start_troops reads is_bot, which is why the re-grant must follow the
-       flag. Guarded on alive: a seat whose spawn failed owns no tiles and
-       must not carry phantom troops into step 1. */
     sim_reset(e);
     for (int a = 0; a < e->num_agents; a++) {
         int p = a + 1;
@@ -1856,10 +1575,6 @@ void puf_step(Env *e) {
         int p = s->seat;
         int tiles = e->players[p].tiles.count;
 
-        /* Dense reward is the DELTA, not the level. Absolute land share would
-           read 0.020 one step and 0.021 the next -- no magnitude change to
-           differentiate. Delta also makes territory loss negative for free, so
-           no separate defense term is needed. */
         float reward = (float)(tiles - s->prev_tiles) / e->land_tiles;
         s->prev_tiles = tiles;
         s->decisions++;
@@ -1878,8 +1593,6 @@ void puf_step(Env *e) {
         }
     }
 
-    /* Reset BEFORE observing, so the first obs of the new episode is the new
-       episode -- not the last frame of the old one. */
     if (episode_over) puf_reset(e);
     else compute_observations(e);
 }
@@ -1908,26 +1621,22 @@ void puf_render(Env *e) {
     EndDrawing();
 }
 
-/* ---------------- PufferLib 5.0 interface ---------------- */
+// puffer interface
 
 void puf_init(Env *e, Dict *kwargs) {
     e->num_agents    = (int)dict_get(kwargs, "num_agents");
     if (e->num_agents < 1)      e->num_agents = 1;
-    if (e->num_agents > MAXP-1) e->num_agents = MAXP-1;   /* indexes agents[MAXP-1] */
+    if (e->num_agents > MAXP-1) e->num_agents = MAXP-1;
     e->action_repeat = (int)dict_get(kwargs, "action_repeat");
     e->max_steps     = (int)dict_get(kwargs, "max_steps");
     e->agent_is_bot  = (int)dict_get(kwargs, "agent_is_bot");
 
-    /* The framework sets e->rng = <env index> before calling us, so env 0 would
-       run on 0 -- xorshift32's fixed point -- and low indices would get
-       adjacent states with correlated early output. Scramble in place, before
-       anything draws. */
     rng_seed(e, e->rng);
 
     for (int i = 0; i < e->num_agents; i++) {
-        e->agents[i].policy      = 0;   /* one shared policy across all seats */
+        e->agents[i].policy      = 0;
         e->agents[i].action_mask = NULL;
-        e->seats[i].seat         = i + 1;   /* player ids are 1-based */
+        e->seats[i].seat         = i + 1;
     }
     memset(&e->log, 0, sizeof(Log));
 }
@@ -1943,5 +1652,5 @@ void puf_log(Log *log, Dict *out) {
 }
 
 void puf_close(Env *e) {
-    (void)e;   /* nothing heap-allocated: every array is inline in Env */
+    (void)e;
 }

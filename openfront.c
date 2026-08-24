@@ -1,6 +1,6 @@
 #include "openfront.h"
 
-/* ---------------- harness ---------------- */
+// harness
 
 static void hist_run(int episodes, int nticks, unsigned int seed) {
     Env *e = (Env*)malloc(sizeof(Env));
