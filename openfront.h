@@ -842,7 +842,18 @@ static int annex_enclosed(Env *e, int p, int start) {
 }
 
 /* The enemy running the largest attack on p, restricted to enemies bordering
-   this cluster; failing that, the enemy bordering it on the most tiles.
+   this cluster; failing that, the enemy bordering it on the most TILES.
+
+   cnt[] counts distinct cluster tiles touched, not adjacencies: a cluster tile
+   with two of its four neighbours owned by q is one bordering tile, not two.
+   Counting adjacencies would let a q that wraps a few tiles tightly outrank a
+   q that touches more of the cluster along a flat front. Same defect class as
+   the nb_shared bug in compute_observations -- the (tile, neighbour) pair is
+   the natural loop unit and the wrong counting unit.
+
+   The dedupe cannot change the attack-branch gate below, which only tests
+   cnt[attacker] == 0, and zero-vs-nonzero is unaffected.
+
    Deliberate divergence: ties break by player id rather than cluster-traversal
    order, which is an artifact. */
 static int annex_capturer(Env *e, int p, const int *tiles, int n) {
@@ -856,6 +867,10 @@ static int annex_capturer(Env *e, int p, const int *tiles, int n) {
         for (int j = 0; j < k; j++) {
             int o = e->owner[nb[j]];
             if (o == 0 || o == p) continue;
+            int dup = 0;                       /* already counted for this tile? */
+            for (int m = 0; m < j; m++)
+                if (e->owner[nb[m]] == o) { dup = 1; break; }
+            if (dup) continue;
             cnt[o]++;
             any = 1;
         }
@@ -1221,7 +1236,14 @@ static void check_borders(Env *e);
    stop; win check runs every 10 ticks as in source. */
 static int sim_tick(Env *e) {
     e->ticks++;
-    for (int p = 1; p < MAXP; p++) bot_tick(e, p);
+    /* Seats 1..num_agents are policy-controlled through apply_action; the
+       scripted driver must not co-drive them. num_agents is 0 in the
+       standalone harness (sim_init memsets the Env), so bot-only runs are
+       unchanged. */
+    for (int p = 1; p < MAXP; p++) {
+        if (p <= e->num_agents) continue;
+        bot_tick(e, p);
+    }
     for (int i = 0; i < MAXATK; i++)
         if (e->attacks[i].active) attack_tick(e, &e->attacks[i]);
     /* spec 2: per player, troop growth THEN the annexation check */
@@ -1787,15 +1809,20 @@ static void add_log(Env *e, int seat_idx) {
 }
 
 void puf_reset(Env *e) {
-    /* is_bot must be set BEFORE sim_reset, which grants start troops through
-       start_troops(e, p) -- that reads is_bot. Deliberate coupling. */
+    /* sim_reset runs FIRST and resets is_bot to all-1 (players_reset), so the
+       agent seats' type is applied after it, and their start troops -- granted
+       inside sim_reset at bot rates -- are re-granted at the real type.
+       start_troops reads is_bot, which is why the re-grant must follow the
+       flag. Guarded on alive: a seat whose spawn failed owns no tiles and
+       must not carry phantom troops into step 1. */
     sim_reset(e);
     for (int a = 0; a < e->num_agents; a++) {
         int p = a + 1;
-        e->is_bot[p]  = (unsigned char)e->agent_is_bot;
-        e->players[p].troops = start_troops(e, p);   /* re-grant at the new type */
+        e->is_bot[p] = (unsigned char)e->agent_is_bot;
+        if (e->players[p].alive)
+            e->players[p].troops = start_troops(e, p);
         e->seats[a].seat            = p;
-        e->seats[a].done            = 0;
+        e->seats[a].done            = e->players[p].alive ? 0 : 1;
         e->seats[a].prev_tiles      = e->players[p].tiles.count;
         e->seats[a].decisions       = 0;
         e->seats[a].episode_return  = 0.0f;
@@ -1885,6 +1912,8 @@ void puf_render(Env *e) {
 
 void puf_init(Env *e, Dict *kwargs) {
     e->num_agents    = (int)dict_get(kwargs, "num_agents");
+    if (e->num_agents < 1)      e->num_agents = 1;
+    if (e->num_agents > MAXP-1) e->num_agents = MAXP-1;   /* indexes agents[MAXP-1] */
     e->action_repeat = (int)dict_get(kwargs, "action_repeat");
     e->max_steps     = (int)dict_get(kwargs, "max_steps");
     e->agent_is_bot  = (int)dict_get(kwargs, "agent_is_bot");
