@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 P=$HOME/summer26/PufferLib
-INC="-I $P/raylib-5.5_macos/include -I $P/src -I $P/vendor"
+INC="-I $P/raylib-5.5_macos/include -I $P/src -I $P/vendor -I $P/ocean/openfront"
 RL=$P/raylib-5.5_macos/lib/libraylib.a
 FW="-framework Cocoa -framework IOKit -framework CoreVideo -framework OpenGL"
 SAN="-fsanitize=address,undefined"
