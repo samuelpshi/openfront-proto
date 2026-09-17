@@ -1,6 +1,6 @@
 /* Exercises the PufferLib interface path (puf_init / puf_reset / puf_step)
    with hand-wired buffers, standing in for what src/pufferl.cu does. The
-   openfront.c harness never calls these, so without this file the entire
+   harness.c harness never calls these, so without this file the entire
    binding is unexecuted code. */
 #include "openfront.h"
 

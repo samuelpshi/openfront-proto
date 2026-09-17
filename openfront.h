@@ -604,7 +604,7 @@ static void attack_tick(Env *e, Attack *a) {
     }
 }
 
-// annexation
+// annexation (spec 9)
 
 static int annex_surrounded(Env *e, int p, const int *tiles, int n, int largest) {
     int cminx = W, cmaxx = -1, cminy = H, cmaxy = -1;
@@ -807,7 +807,7 @@ static void annex_tick(Env *e, int p) {
     }
 }
 
-// bots
+// bots (spec 11)
 
 static void bots_init(Env *e) {
     for (int i = 1; i < MAXP; i++) {
