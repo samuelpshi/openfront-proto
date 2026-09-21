@@ -1,0 +1,1 @@
+g++ -fsyntax-only -x c++ -std=c++17 -I "$HOME/summer26/PufferLib/src" -I "$HOME/summer26/PufferLib/vendor" -I "$HOME/summer26/PufferLib/raylib-5.5_macos/include" "$HOME/summer26/PufferLib/ocean/openfront/openfront.h" && echo "c++ ok"
