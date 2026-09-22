@@ -30,12 +30,13 @@ static void mkenv(Env *e, Bufs *b, int idx, int norient, int stab, int policy) {
     dict_set(kw, "num_orientations", norient);
     dict_set(kw, "stability", stab);
     dict_set(kw, "policy", policy);
+    dict_set(kw, "eval_seeds", 0);
     memset(e, 0, sizeof(*e));
-    e->rng = (unsigned int)idx;          /* framework does exactly this */
+    e->rng = (unsigned int)idx;
     puf_init(e, kw);
     for (int i = 0; i < kw->size; i++) { free(kw->items[i].values); free(kw->items[i].str); }
     free(kw->items); free(kw->name); free(kw);
-    wire(e, b);                          /* framework assigns after init */
+    wire(e, b);
 }
 
 static unsigned long long fnv(const void *p, size_t n, unsigned long long h) {
@@ -55,7 +56,6 @@ static unsigned long long env_hash_x(const Env *e, int with_rng) {
 }
 static unsigned long long env_hash(const Env *e) { return env_hash_x(e, 1); }
 
-/* Sampler stand-in: uniform over mask support, own rng. */
 static int sample_masked(const unsigned char *m, unsigned int *s) {
     int pop = 0;
     for (int a = 0; a < BP_ACT_TOTAL; a++) pop += m[a];
@@ -65,7 +65,6 @@ static int sample_masked(const unsigned char *m, unsigned int *s) {
     return -1;
 }
 
-/* ---- T1: oracle replay. Target placement must be legal and rest at tz. ---- */
 static int t1_oracle(int n, int norient) {
     static Env e; static Bufs b;
     mkenv(&e, &b, 0, norient, 1, BP_POLICY_NONE);
@@ -98,7 +97,6 @@ static int t1_oracle(int n, int norient) {
     return u == 1.0f ? 0 : 1;
 }
 
-/* Run one full episode on seed s, return final hash. */
 static unsigned long long run_episode(Env *e, Bufs *b, unsigned int s, unsigned int *act_rng) {
     bp_reset_seeded(e, s);
     unsigned long long h = 0;
@@ -111,7 +109,6 @@ static unsigned long long run_episode(Env *e, Bufs *b, unsigned int s, unsigned 
     }
 }
 
-/* ---- T2: same seed -> bit-identical episode. ---- */
 static int t2_determinism(int n) {
     static Env e1, e2; static Bufs b1, b2;
     mkenv(&e1, &b1, 3, 2, 1, BP_POLICY_NONE);
@@ -126,7 +123,6 @@ static int t2_determinism(int n) {
     return 0;
 }
 
-/* ---- T3: isolation. N envs alone vs round-robin, per-step hash traces. ---- */
 #define T3_N 8
 #define T3_STEPS 2000
 static int t3_isolation(void) {
@@ -158,7 +154,6 @@ static int t3_isolation(void) {
     return 0;
 }
 
-/* ---- drive: framework path, sampler over mask, obs range, log invariants ---- */
 static int drive(long steps) {
     static Env e[4]; static Bufs b[4];
     for (int i = 0; i < 4; i++) { mkenv(&e[i], &b[i], i, 2, 1, BP_POLICY_NONE); puf_reset(&e[i]); }
@@ -183,7 +178,7 @@ static int drive(long steps) {
     float n = L.n;
     float causes = (L.mask_cause_orient + L.mask_cause_footprint + L.mask_cause_height + L.mask_cause_support) / n;
     float legal = L.mean_legal_actions / n;
-    float closure = causes + legal / (float)BP_ACT_TOTAL;      /* must be 1 */
+    float closure = causes + legal / (float)BP_ACT_TOTAL;
     printf("drive  %ld steps x4, %.0f eps: util %.3f placed %.1f remaining %.1f legal %.1f | "
            "orient %.3f foot %.3f height %.3f support %.3f | closure %.6f obs [%.2f, %.2f]\n",
            steps, (double)n, (double)(L.utilization / n), (double)(L.boxes_placed / n),
@@ -197,9 +192,6 @@ static int drive(long steps) {
     return 0;
 }
 
-/* ---- untrained-eval path: action 0 every step, as puffercpu.c sends with
-   no checkpoint. Must not corrupt state (debug build runs bp_check_state
-   every step) and must count every illegal action. ---- */
 static int t_illegal(int n) {
     static Env e; static Bufs b;
     mkenv(&e, &b, 0, 2, 1, BP_POLICY_NONE);
@@ -218,7 +210,6 @@ static int t_illegal(int n) {
     return illegal_seen > 0 ? 0 : 1;
 }
 
-/* ---- baselines on EVAL_SEEDS, through the in-env policy path ---- */
 static void baseline(int policy, const char *name, int norient, int stab, int nseeds) {
     static Env e; static Bufs b;
     mkenv(&e, &b, 0, norient, stab, policy);
@@ -235,6 +226,24 @@ static void baseline(int policy, const char *name, int norient, int stab, int ns
            name, m, sd, sd / sqrt((double)nseeds), placed / nseeds);
 }
 
+static int t_evalseeds(void) {
+    static Env a, c; static Bufs ba, bc;
+    mkenv(&a, &ba, 5, 2, 1, BP_POLICY_DBL);
+    mkenv(&c, &bc, 9, 2, 1, BP_POLICY_DBL);
+    c.eval_seeds = 1;
+    puf_reset(&c);
+    for (int s = 1; s <= 1000; s++) {
+        bp_reset_seeded(&a, (unsigned int)s);
+        float ua = a.log.utilization, uc = c.log.utilization;
+        do puf_step(&a); while (!ba.term);
+        do puf_step(&c); while (!bc.term);
+        if (a.log.utilization - ua != c.log.utilization - uc) { printf("FAIL eval_seeds at seed %d\n", s); return 1; }
+    }
+    printf("T-evalseeds  seeds 1..1000 via eval_seeds == bp_reset_seeded, dbl mean %.6f  OK\n",
+           (double)(c.log.utilization / c.log.n));
+    return 0;
+}
+
 int main(int argc, char **argv) {
     int n = argc > 1 ? atoi(argv[1]) : 5000;
     printf("sizeof(Env) = %zu, OBS_SIZE %d, ACT %d\n", sizeof(Env), OBS_SIZE, BP_ACT_TOTAL);
@@ -245,6 +254,7 @@ int main(int argc, char **argv) {
     fail |= t3_isolation();
     fail |= drive(n * 10L);
     fail |= t_illegal(n / 5);
+    fail |= t_evalseeds();
     if (fail) { printf("FAILED\n"); return 1; }
     const char *nm[] = {"none", "random", "dbl", "flat"};
     for (int st = 1; st >= 0; st--)
