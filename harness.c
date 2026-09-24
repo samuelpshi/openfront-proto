@@ -243,6 +243,8 @@ int main(int argc, char **argv) {
         map_dump(20, 1);
     } else if (argc > 1 && strcmp(argv[1], "spawn") == 0) {
         spawn_sweep();
+    } else if (argc > 2 && strcmp(argv[1], "hist") == 0) {
+        hist_run(300, 2000, (unsigned int)atoi(argv[2]));
     } else {
         hist_run(300, 2000, 42);
     }
