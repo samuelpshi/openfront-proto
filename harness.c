@@ -2,6 +2,18 @@
 
 // harness
 
+#ifdef DEBUG
+static uint64_t map_hash(Env *e) {
+    uint64_t h = 1469598103934665603ULL;
+    for (int t = 0; t < OF_N; t++) h = (h ^ (uint64_t)e->owner[t]) * 1099511628211ULL;
+    for (int p = 1; p < MAXP; p++) {
+        h = (h ^ (uint64_t)e->players[p].tiles.count) * 1099511628211ULL;
+        h = (h ^ (uint64_t)e->players[p].alive) * 1099511628211ULL;
+    }
+    return h;
+}
+#endif
+
 static void hist_run(int episodes, int nticks, unsigned int seed) {
     Env *e = (Env*)malloc(sizeof(Env));
     if (!e) { printf("out of memory\n"); exit(1); }
@@ -11,6 +23,10 @@ static void hist_run(int episodes, int nticks, unsigned int seed) {
     for (int ep = 0; ep < episodes; ep++) {
         sim_reset(e);
         sim_run(e, nticks);
+#ifdef DEBUG
+        printf("ep %3d len %4ld env %016llx map %016llx\n", ep, e->ticks,
+               (unsigned long long)env_hash(e), (unsigned long long)map_hash(e));
+#endif
         if (e->ticks < nticks) wins++;
         total_len += e->ticks;
         for (int p = 1; p < MAXP; p++) {
