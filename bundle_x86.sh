@@ -1,4 +1,5 @@
-~/Downloads/of_x86check.zip
+#!/bin/bash
+# Build the x86 recheck bundle from the COMMITTED tree -> ~/Downloads/of_x86check.zip
 set -e
 F=$HOME/summer26/PufferLib
 D=$HOME/summer26/openfront
