@@ -999,3 +999,11 @@ Added `harness.c` `fronts <seed>` to measure front geometry. Finding: `sorted_ne
 
 Later on 25 Sept: range and min-dist were set from the `fronts` numbers. Defense post range is 30 → 6. Radius 7–8 would cover 64–83% of the median territory (242 tiles, by πr²), and at ×5 mag one post would shield nearly everything. Radius 6 covers ~47%, about half the longest front (p50 ext 9.8). Structure min-dist is 15 → 3, keeping upstream's range/min-dist ratio of 2. Tune range after the retrain if posts are ignored or dominant. On checking the header, there is no post-distance comparison yet: `has_post` is a bare `int` into `attack_logic`, passed as `0`. By the spec, the range should be inclusive (`d² <= r²`, §2.4) and min-dist strict (`d² < r²`, §15.5).
 
+## 25 Sept 2026 — B-lite step 1: gold (`7b4e6d01`)
+
+`int64_t gold` and `sent_attack` were added per player. Income is `floor(base × GOLD_MULT)` (base 50 bot / 100 human, multiplier 10), paid in `player_tick` after troop growth. `conquer_player_gold` runs at the start of `dead_defender` (every trigger) and in `annex_remove` when the collected set is the whole territory. A dead player's gold is zeroed in `player_tick`. That zeroing is what removes a passive human's gold, since the transfer skips them.
+
+Upstream check at `7defd24`: the "never sent an attack" test is the `ATTACK_INDEX_SENT` **troop sum** (`GameImpl.ts:1389`), not a flag. It's recorded after `removeTroops`, before cancellation (`AttackExecution.ts:139`), and decremented only by a player-ordered retreat (`attackCancel`). Retreat isn't an action here, and our `attack_start` only reaches `troops_remove` with at least 1 troop, so a flag set there is equivalent. Revisit if retreat is ever added.
+
+Verification: stdout with the `env` hashes, the `sizeof` line and the new `gold ok` line stripped is `cmp`-identical to `3e26237d`'s (318 lines). The new sha is `0a769dcf…` and `sizeof(Env)` is 1022312 (+72: `gold` adds 8 per player; `sent_attack` fills the 4 bytes of padding after `alive`. 9 players × 8). All three `drive` configs are byte-identical. x86_64 under Rosetta (`-O0` and `-O2` DEBUG) matches the Mac output byte for byte, and the Linux x86 bundle (both builds) matched.
+

@@ -4,7 +4,7 @@ Companion to `openfront_env_spec.md`. The spec is the **mechanics** reference: f
 
 This file records **current state only**. Session narratives, superseded baselines and closed investigations live in `docs/history.md`, which is not loaded into chats. When something changes, edit it in place and append the story to history. Don't leave SUPERSEDED banners here.
 
-Last updated: **25 Sept 2026 — B-lite decisions; `fronts` harness mode.**
+Last updated: **25 Sept 2026 — B-lite step 1, gold** (`7b4e6d01`).
 
 ---
 
@@ -27,19 +27,20 @@ The env lives in `ocean/openfront/openfront.h` and `config/openfront.ini` on `sa
 | `4a3d2848` | header anchor `fc50009` → `7defd24` |
 | `fa64934c` | perf: LTB lookup table |
 | `3e26237d` | perf: troop-cap pow table |
+| `7b4e6d01` | B-lite 1: gold (income, `conquerPlayer` transfer, death zeroing) |
 
 **History was rewritten once.** `5.0` was `filter-branch`ed to fix the author email. Two hashes changed: `1f3eae15` → `eea12848` and `9f303628` → `39db150f`; `297cad49` kept its hash. The trees are identical. Use the new hashes everywhere.
 
 **Dev repo:** `samuelpshi/openfront-proto`, with `docs/` and `CLAUDE.md` tracked.
 
-**Baseline: the acceptance target for any behaviour-neutral change.** It comes from `hist_run(300, 2000, 42)` at `3e26237d`, and stdout includes the per-episode `ep … env … map …` lines. Apart from the `sizeof(Env)` line, that stdout is byte-identical (`cmp`) to `4a3d2848`'s, which was byte-identical on Mac arm64 and x86_64 under both x86 builds, with no masking. The x86 recheck has not been re-run at `3e26237d`.
+**Baseline: the acceptance target for any behaviour-neutral change.** It comes from `hist_run(300, 2000, 42)` at `7b4e6d01`, and stdout includes the per-episode `ep … env … map …` lines. Gold changed only the `env` hashes (which now cover gold and `sent_attack`), the `sizeof(Env)` line and one new test line. With those stripped, stdout is `cmp`-identical to `3e26237d`'s, so the sim trajectory is unchanged. The x86 recheck at `7b4e6d01` matched: both Linux x86 builds reproduce the Mac stdout sha. x86_64 under Rosetta (`-O0` and `-O2`) matched as well.
 
 ```
 wins 54 (18.0%), mean length 1920, eliminated 64.2%
 annexations 3857 (12.86/ep), tiles moved 29773 (7.7/event)
 spawn failures 0, heap peak 209/2048, heap drops 0
-sizeof(Env) = 1022240
-of_dbg stdout sha256 0a87cd753ecc4e6eca039b8810b615cac4fc6c60961c852c88cbb5b77c6251ea
+sizeof(Env) = 1022312
+of_dbg stdout sha256 0a769dcf71378607e056847dca7aace3864cd017330795b7e7242e62a9bdf8c4
 ```
 
 Single-seed wins swing by ±9 with nothing changed (seed sd ≈ 9 over 20 seeds). Read behaviour changes off `sweep.sh`, never off this block. Don't compare win rates across the terrain change: the 0.8 land-share bar fell from ~1693 tiles to ~1198.
@@ -92,7 +93,7 @@ Single-seed wins swing by ±9 with nothing changed (seed sd ≈ 9 over 20 seeds)
 - `rng_int(e, lo, hi)`: the range is `[lo, hi)`, matching upstream `nextInt` argument for argument.
 - `attack_logic(...)`: a pure function. Pass it values, not `Env`.
 
-**Sim.** The sim covers: packed terrain byte and accessors; `TileSet` with O(1) incremental border maintenance; `conquer` as the only territory mutation point; the min-heap; `Attack` with a per-attack border bitset; `attack_start` (in the order deduct → cancel → combine → find slot → assign), `attack_tick` and the pure `attack_logic`; troop growth and cap via DetMath; the dead-defender wipe; annexation (capturer by adjacency count, hole-aware largest cluster, `isEnclosed`); the win check; spawn placement on the 52-tile disk; bot drivers; and xorshift32 RNG with a splitmix32 seed scramble. Player troops are `int64_t`, and every write goes through `troops_set/add/remove`, which floor. Attack troops are `double`, clamped at 0 on every write. Heap priorities stay `float` by design, since every key value is exact in float.
+**Sim.** The sim covers: packed terrain byte and accessors; `TileSet` with O(1) incremental border maintenance; `conquer` as the only territory mutation point; the min-heap; `Attack` with a per-attack border bitset; `attack_start` (in the order deduct → cancel → combine → find slot → assign), `attack_tick` and the pure `attack_logic`; troop growth and cap via DetMath; the dead-defender wipe; annexation (capturer by adjacency count, hole-aware largest cluster, `isEnclosed`); gold (income after troop growth, `conquer_player_gold` at the wipe and the whole-territory annex, zeroed on death); the win check; spawn placement on the 52-tile disk; bot drivers; and xorshift32 RNG with a splitmix32 seed scramble. Player troops are `int64_t`, and every write goes through `troops_set/add/remove`, which floor. Attack troops are `double`, clamped at 0 on every write. Heap priorities stay `float` by design, since every key value is exact in float.
 
 **All sim state lives in `struct Env`.** There are no mutable globals, and every function takes `Env *e` first. This is the precondition for PufferLib's `#pragma omp parallel for` stepping. `isolation_test` guards it: episodes run alone versus round-robin one tick at a time must hash identically. Run it after any change that touches env state.
 
@@ -107,7 +108,7 @@ Single-seed wins swing by ±9 with nothing changed (seed sd ≈ 9 over 20 seeds)
 - **The spawn-scaled thresholds** are `WIPE_TILES` and `ANNEX_TILES`, both `SPAWN_TILES/3 = 17`.
 - **The framework callocs `Env` and calls `puf_init`, never `sim_init`.** Anything filled once at init (the `lt_sig` and `cap_pow` tables) goes in `tables_init(e)`, which both call. `drive_test` asserts the tables on the `puf_init` path.
 
-**Debug infrastructure.** Everything below sits behind `DEBUG`. `check_borders()` asserts the border invariant, phantom tiles, `alive` consistency, and that troops are non-negative and non-NaN. The test suite is `ts_test`, `conquer_test`, `blob_test`, `hole_test`, `heap_test`, `attack_test`, `isolation_test`, `annex_shore_test`, `annex_hole_test` and the `attack_logic` golden-vector test. The golden vectors are 5 cases computed with libm at relative tolerance 1e-9; case 4 uses a 300k-tile defender so the territory bonus actually bites. Unit tests use a local seeded xorshift, never `rand()`. When a new invariant turns up, extend `check_borders()` first; it's cheaper than the bug.
+**Debug infrastructure.** Everything below sits behind `DEBUG`. `check_borders()` asserts the border invariant, phantom tiles, `alive` consistency, and that troops are non-negative and non-NaN. The test suite is `ts_test`, `conquer_test`, `blob_test`, `hole_test`, `heap_test`, `attack_test`, `isolation_test`, `annex_shore_test`, `annex_hole_test`, `gold_test` and the `attack_logic` golden-vector test. The golden vectors are 5 cases computed with libm at relative tolerance 1e-9; case 4 uses a 300k-tile defender so the territory bonus actually bites. Unit tests use a local seeded xorshift, never `rand()`. When a new invariant turns up, extend `check_borders()` first; it's cheaper than the bug.
 
 **Binding.** The binding implements `puf_init/reset/step/log/render/close`, `compute_observations`, `sorted_neighbors`, `apply_action` and `add_log`. `OBS_SIZE 31` and `ACT_SIZES {7}`. The config keys are `num_agents`, `agent_is_bot`, `map_seed` (0 maps to 123456789) and `land_frac`.
 
