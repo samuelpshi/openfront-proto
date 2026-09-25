@@ -25,6 +25,8 @@ int main(int argc, char **argv) {
     dict_set(kw, "action_repeat", 10);
     dict_set(kw, "max_steps",     200);
     dict_set(kw, "agent_is_bot",  agent_is_bot);
+    dict_set(kw, "land_frac",     0.65);   /* config/openfront.ini */
+    dict_set(kw, "map_seed",      0);
 
     Env *envs = (Env*)calloc(NENV, sizeof(Env));
     int total_agents = 0;
@@ -32,6 +34,22 @@ int main(int argc, char **argv) {
         envs[i].rng = i;                 /* framework does exactly this */
         puf_init(&envs[i], kw);
         total_agents += envs[i].num_agents;
+    }
+
+    /* the framework never calls sim_init: tables must be filled by puf_init */
+    const int tn[4] = {0, 1, OF_N / 2, OF_N};
+    for (int i = 0; i < NENV; i++) {
+        for (int k = 0; k < 4; k++) {
+            int n = tn[k];
+            if (envs[i].lt_sig[n] != lt_sigmoid(n)
+                || envs[i].cap_pow[n] != det_pow((double)n, 0.6)) {
+                printf("FAIL: env %d init table mismatch at n = %d: "
+                       "lt_sig %.17g vs %.17g, cap_pow %.17g vs %.17g\n",
+                       i, n, envs[i].lt_sig[n], lt_sigmoid(n),
+                       envs[i].cap_pow[n], det_pow((double)n, 0.6));
+                return 1;
+            }
+        }
     }
 
     /* one contiguous block per field, exactly like VecEnv */
