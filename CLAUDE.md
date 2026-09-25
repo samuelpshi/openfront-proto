@@ -149,7 +149,7 @@ Explain the reasoning, not just the patch.
 
 `docs/openfront_env_spec.md` — mechanics; wins on mechanics disputes.
 `docs/openfront_project_reference.md` — state, decisions, training/trainer ops,
-  §6.4 for map size and `sizeof(Env)` scaling.
+  §6.3 for map size and `sizeof(Env)` scaling.
 Upstream source of truth: `github.com/openfrontio/OpenFrontIO`, AGPL-3.0.
 Mechanics are derived, never transliterated.
 

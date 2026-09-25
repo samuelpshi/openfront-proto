@@ -35,7 +35,7 @@ Each tier is playable on its own and depends only on tiers above it.
 | G | Nation AI | §26 + separate file |
 | H | Teams, difficulty, anti-stall modes, ranked rules | §23 |
 
-Tier A comes first because the existing C sim implements the `fc50009` core, and several of its mechanics are now wrong (§1, §25). Re-deriving the core is behaviour-changing work: each change is its own commit with its own new `hist_run` baseline. Progress is tracked in §25.
+Tier A is complete (25 Sept 2026, `4a3d2848`); §25 lists what changed and what remains inert.
 
 **PR #1 stopping point (decided 24 Sept 2026): Tier A + "Tier B-lite".** The full-game scope stands as the long-run plan, but PR #1 stops at the smallest build that contains the game's actual decision loop: spend troops on land, spend gold on troop capacity (City), or spend gold to hold a border cheaply (Defense Post). Without gold and structures the agent has one decision (which neighbour to hit), which is why the current build plays like territorial.io rather than OpenFront.
 
@@ -58,35 +58,12 @@ Out of PR #1: upgrades (§15.6, open — see below), every other unit type, and 
 3. **Structure min-distance** (15, §15.5) — same question, smaller stakes.
 4. **Action space.** Discrete-7 → Discrete-9 (`build_city`, `build_post`) with automatic placement: City on the deepest interior tile, post on the border facing the most dangerous neighbour. Extends the settled Discrete-7 decision; does not reopen it.
 5. **Upgrades.** Probably out (a second City is the same decision as a City upgrade); confirm.
-6. **Tier A trim — decided 25 Sept 2026.** Spawn disk landed; spawn phase is equivalent by construction; spawn immunity moves to Phase 3; river-crossing `nearby()` moves to Tier C (it needs boats). The combat rewrite (item 1) may not: defense posts plug directly into the §9 formulas.
 
 ---
 
-## 1. Corrections to the `fc50009` edition — read first
+## 1. Changes since the `fc50009` edition
 
-These override anything in older handoffs, chat history, or the previous edition.
-
-**Upstream drift since `fc50009`:**
-
-1. **Combat model rewritten (§9).** The per-tick "tiles budget" (`attackTilesPerTick`) is gone. Each attack now spends a tick budget of exactly 1; every conquered tile consumes a `tickFraction`. The vs-player attacker-loss and speed formulas are new; the sigmoid defender debuff and the `>100k tiles` large-attacker branches are replaced by a log-logistic territory bonus centred at 300k tiles. Terra-nullius losses and the Human/Nation-vs-Bot ×0.7 survive unchanged.
-2. **Annexation largest-cluster selection changed (§11).** Single-cluster fast path; and if the largest border cluster is a *hole* in the player's own territory, the largest non-hole cluster takes the largest-cluster rule instead.
-3. **`isOnEdgeOfMap` now includes 4-adjacency to impassable terrain (§4).** Consumed by both annexation surround tests and `isEnclosed`.
-4. **Attack troop deduction uses the floored amount actually removed (§7).** Previously a fractional request left the attack holding unpaid troops.
-5. **Win percentage is a function of elapsed time** (overtime mode, off by default) and the win check has a hard 170-minute limit (§12).
-6. **Spawn phase lengths changed**: 100 singleplayer / 150 random spawn / 200 multiplayer (was 100/150/300) (§13).
-7. **Map generator**: small lakes/islands being removed are now replaced by the majority neighbouring terrain type (can be impassable), not forced to land/water. Irrelevant to procedural C maps; relevant to any offline map bake.
-
-**Present at `fc50009` but missing from the previous edition:**
-
-8. **Player troops are integers.** `PlayerImpl._troops` is a `bigint`; every add/remove goes through `toInt` = `floor` (§2). Attack troops are plain doubles. The C sim used `float` for both; since Tier A #2a it uses `double` for both, and #2b moves player troops to `int64_t` with floor helpers (§25).
-9. **Every `AttackExecution` owns a `PseudoRandom(123)`** — a fixed seed, identical for every attack. Priority jitter and the `borderSize` jitter replay the same sequence per attack. Stream fidelity is not a goal; record it as a known divergence (§2.3).
-10. **Manual retreat is delayed, not instant (§7.4).** Ordering a retreat freezes the attack for 20 ticks, then returns survivors with a 25% malus vs players.
-11. **Spawn immunity (§13.4)**: humans and nations cannot be attacked *by humans* during the spawn phase plus 50 ticks. Bots are never immune; non-human attackers ignore immunity.
-12. **The spawn disk is 52 tiles, not 49 (§13.2)**: the Euclidean-4 test is taken from a centre shifted by −0.5 in x and y.
-13. **"Neighbours" crosses rivers (§5.4)**: `nearby()` adds players and terra nullius up to 4 water tiles away, sampled from every 10th shore border tile, and ignores unowned fallout.
-14. **The bot driver sends boats (§14)**: a target that does not share a land border is attacked by transport ship; terra nullius across water is expanded into by boat.
-15. **Dead-defender wipe calls `conquerPlayer` on every trigger (§10)** (gold transfer), and its "someone else captures" branch tests friendliness against the *target*, not the attacker.
-16. **Defense posts do not shoot at this anchor (§17.2).** `DefensePostExecution.shoot()` exists but is never called; posts act only through the attack modifier.
+All sixteen corrections (upstream drift since `fc50009`, plus rules the previous edition missed) are folded into the sections below, and the Tier A ones are implemented (§25). The itemised list is archived in `docs/history.md`. When upstream moves again, diff against the §-anchor commit and record new drift here until it is folded in.
 
 ---
 
@@ -103,7 +80,7 @@ These override anything in older handoffs, chat history, or the previous edition
 | Unit health | `bigint` | `modifyHealth(d)`: `clamp(health + floor(d), 0, floor(maxHealth))`; reaching 0 deletes the unit. Units without `maxHealth` have health 1. |
 | Relations | `number` | Clamped to [−100, 100]. |
 
-All other arithmetic is IEEE double. **The C sim uses `float`; full fidelity requires `double` for the sim math** (troop growth, combat, economy curves). Record the choice either way.
+All other arithmetic is IEEE double. **In C:** sim math is `double`; player troops are `int64_t` behind `troops_set` / `troops_add` / `troops_remove`, which floor with upstream's semantics; attack troops are `double`, clamped at 0 on every write; heap priorities stay `float` (every key value is exact in float). Gold (B-lite) should be `int64_t` for the same reason.
 
 ### 2.2 Deterministic transcendental math (`DetMath.ts`)
 
@@ -155,7 +132,7 @@ Streams are per-object, seeded from ids, hashes or the current tick: attacks `12
 - Shoreline bit is set on land **and** water tiles whose land-ness differs from some 4-neighbour. `isShore(t)` = land ∧ shoreline. `isOceanShore(t)` = land ∧ some 4-neighbour has the ocean bit (computed live, not a bit).
 - `TileRef = y·W + x`. **4-neighbour order everywhere is N, S, W, E** (`−W, +W, −1, +1`). 8-neighbour order (`neighbors8`): `x−1` column (N,·,S), then N, S, then `x+1` column (N,·,S).
 - `isBorder(t)`: any 4-neighbour has a different owner id (water has owner 0, so owned coastal tiles are border tiles).
-- **`isOnEdgeOfMap(t)`: on the map boundary, or any 4-neighbour is impassable.** (Changed since `fc50009`; §1 item 3.)
+- **`isOnEdgeOfMap(t)`: on the map boundary, or any 4-neighbour is impassable.** (Changed since `fc50009`.)
 - `numLandTiles` counts passable land; `setWater` decrements it.
 - `setWater(t)` (water-nuke mode only): terrain byte becomes `0` — lake water, no ocean bit, no shoreline, magnitude 0 — and the water manager then propagates the ocean bit from ocean neighbours and recomputes magnitudes and shorelines around the crater.
 
@@ -257,7 +234,7 @@ In this order; any "reject" deactivates the execution:
 1. Target must exist; attacker ≠ target; reject if attacker `isFriendly(target)`.
 2. If target is a player and **neither side is a Bot**: target adds a **temporary embargo** against the attacker (§22.4), and any pending alliance request *from the target to the attacker* is rejected. (This happens even if step 3 then rejects.)
 3. If target is a player and `!attacker.canAttackPlayer(target)` (spawn immunity, §13.4) → reject.
-4. `startTroops` defaults to `attackAmount` = `troops/20` if the attacker is a Bot, else `troops/5`. Every AI caller passes an explicit amount; the agent's `apply_action` sends `troops/5` (project decision, see project reference §5).
+4. `startTroops` defaults to `attackAmount` = `troops/20` if the attacker is a Bot, else `troops/5`. Every AI caller passes an explicit amount; the agent's `apply_action` sends `troops/5` (project decision, see project reference §4).
 5. If `removeTroops` (true except for boat landings): `startTroops = attacker.removeTroops(min(attacker.troops, startTroops))` — **the floored amount actually removed**.
 6. Create the attack. Seed the heap: boat landing → `addNeighbors(sourceTile)` only; land attack → `refreshToConquer()` (clear heap and border set, then `addNeighbors` for every attacker border tile).
 7. **Cancellation.** For each of the attacker's incoming attacks whose attacker is this target: if `incoming.troops > attack.troops` → `incoming.troops −= attack.troops`, this attack is deleted, stop; else `attack.troops −= incoming.troops` and the incoming attack is deleted.
@@ -805,43 +782,32 @@ Emoji and quick chat, display messages, stats (`StatsImpl`), motion-plan recordi
 
 ---
 
-## 25. Conformance delta: current C sim vs this spec
+## 25. Conformance delta: C sim vs this spec
 
-What the shipped `openfront.h` (originally built to the `fc50009` edition) had to change to conform to Tier A. **Tier A is complete as of 25 Sept 2026 (`4a3d2848`).** Each item is behaviour-changing and gets its own commit and a new `hist_run` baseline. **PR #1 column** per §0: *in* = required, *trim?* = may move to a later PR, *inert* = no effect until a later tier, *later* = out of PR #1.
+**Tier A complete, 25 Sept 2026 (`4a3d2848`).** Commits, verification and measured effects are in the project reference (§1) and `docs/history.md`. This section keeps only what bears on future work.
 
-**Status (25 Sept 2026): complete.** Every *in* item done or verified conformant; *trim?* items resolved (7 partly in, 8 moved to Tier C); four gaps found that this list did not name (clamp, frontier, two capturer rules). Commit hashes after the 5.0 `filter-branch`: clamp `eea12848`, 2a `39db150f`.
+| # | Item | Status |
+|---|---|---|
+| 1 | Combat math (§9) | done: 1a border set `908b785a`, 1b formulas `c4faca4a` |
+| 2 | Integer player troops (§2.1) | done: 2a double `39db150f`, 2b `int64_t` `84ebc825` |
+| 3 | DetMath + no FP contraction (§2.2) | done, Mac↔x86 identical |
+| 4 | Annexation (§11) | done: 4a capturer `9b542489`, 4b hole selection `d6aef90c`; fast path is a no-op for us |
+| 5 | Attack init (§7.1) | floored deduction done via 2b; land-only combination inert until boats |
+| 6 | Manual retreat (§7.4) | not implemented; needed when retreat becomes an action |
+| 7 | Spawn (§13) | disk done `5175a70e`; phase equivalent by construction; immunity → Phase 3 |
+| 8 | Bot driver (§14) | river `nearby()`/boats → Tier C; fallout → Tier D; alliances/traitor → Tier E; scrapping live with B-lite |
+| 9 | Dead-defender wipe (§10) | conformant; target-friendliness inert without alliances; `conquerPlayer` gold live with B-lite |
+| 10 | Win check (§12) | fallout denominator inert until Tier D |
+| 11 | Per-attack RNG (§2.3) | divergence kept: ours draws from `e->rng` |
+| 12 | `relinquish` (§5.2) | not implemented; needed by nukes |
 
-| # | Item | PR #1 | Status |
-|---|---|---|---|
-| 1 | Combat math | in | **done** — 1a border set `908b785a`, 1b formulas `c4faca4a` |
-| 2 | Integer player troops | in | **done** — 2a `39db150f`, 2b `84ebc825` |
-| 3 | DetMath + FP contraction | in | **done**, verified Mac↔x86 |
-| 4 | Annexation | in | **done** — 4a capturer `9b542489`, 4b hole selection `d6aef90c`; fast path is a no-op for us |
-| 5 | Attack init | in | **done** (floored deduction via 2b); land-only combination inert until boats |
-| 6 | Manual retreat | later | — |
-| 7 | Spawn | trim? → partly in | **disk done** `5175a70e`; phase equivalent by construction; immunity → Phase 3 |
-| 8 | Bot driver | trim? / inert | river `nearby()` → Tier C; fallout → Tier D; scrapping live with B-lite |
-| 9 | Dead-defender wipe | in | **conformant**, no code; `conquerPlayer` gold live with B-lite |
-| 10 | Win check | inert | — |
-| 11 | Per-attack RNG | keep ours | recorded divergence |
-| 12 | `relinquish` | later | needed by nukes |
+Plus a fix outside the list: attack troops clamp at 0 on every write (`eea12848`, §7.3).
 
-1. **Combat math** (§9) — **done.** **1a (found during 1, not in the original list):** `borderSize` is the attack's deduplicated border set (§7.2), not heap size; the C sim used `heap.count`, 1.91× too large. `borderSize == 0` takes exactly one valid tile. **1b:** replace the per-tick tile budget with `tickBudget = 1` and per-tile `tickFraction`; new vs-player loss and speed formulas; log-logistic territory bonuses (≈1 at 48×48). TN losses and ×0.7 unchanged. Must land before defense posts, which modify these formulas.
-2. **Integer player troops** (§2.1) — **done.** Split in two. **2a (done, `39db150f`):** all sim math float → double, with no floors — precision only; verified by lockstep trace against the float build (max relative troop diff 3.8e-6 players, 4.2e-5 attacks normalised to start troops, no tile or attack-set divergence through tick 1200 of episode 0) and 5 seeds (win delta inside one seed sd). Heap priorities stay float (every key is exact in float). **2b (done, `84ebc825`):** player troops → `int64_t`, every write through `troops_set` / `troops_add` / `troops_remove` with upstream's semantics (`removeTroops(x ≤ 0)` returns 0; decay truncates toward zero because negation precedes the floor). Expected behaviour change: defender loss `< 1` floors to zero. Measured: no detectable aggregate effect over 20 seeds (|t| ≤ 0.8).
-3. **DetMath port + no FP contraction** (§2.2). **Done.** Closed the old cross-platform `hist_run` divergence as far as can be shown ("post-commit, Mac and x86 identical"; the pre-commit divergence was never bisected).
-4. **Annexation** (§11): single-cluster fast path — **a no-op for us** (with one cluster the general path already runs `surroundedBySamePlayer`; the extra `isFriendly` check is inert); hole-aware largest-cluster selection — **done (4b)**; `on_map_edge` counts impassable-adjacent tiles (no-op until impassable exists, then required in the same commit as impassable). **Found during 4 (4a, done):** `getCapturingPlayer` counts every adjacency via `getMode` (the C sim counted once per tile per owner) and breaks ties by first encounter — both for `getMode` and for the largest-attack scan (the C sim used lowest id / slot order). **B-lite note:** `removeCluster` calls `conquerPlayer(capturer, p)` when the collected set is p's whole territory — a second gold-transfer call site alongside item 9.
-5. **Attack init** (§7.1): floored actual deduction — falls out of 2b's `troops_remove`; combination only when the *new* attack is a land attack (inert until boats).
-6. **Manual retreat** (§7.4): 20-tick freeze, then 25% malus vs players. Relevant when retreat becomes an agent action.
-7. **Spawn** (§13): 52-tile centre-shifted disk — **done** (integer form `(2dx+1)² + (2dy+1)² ≤ 64`; moves the wipe/annex threshold 16 → 17 via `SPAWN_TILES/3`); spawn-phase length — **equivalent by construction** (nothing executes during it and all spawns are placed at reset); spawn immunity (only binds if the agent seat is Human-type and attacked by Humans — i.e. Phase 3 self-play) — **deferred to Phase 3**.
-8. **Bot driver** (§14): traitor step (inert without alliances); `nearby()` with river crossing and fallout exclusion; boat attacks for non-land-bordering targets and TN across water (requires Tier C); alliance acceptance (inert until Tier E); structure scrapping (**live once Tier B-lite lands**).
-9. **Dead-defender wipe** (§10): friendliness tested against the target (inert without alliances/teams); `conquerPlayer` per trigger (gold transfer — **live once Tier B-lite lands**). Trigger, attacker-first rule, N/S/W/E neighbour order and ≤100 passes were checked against `AttackExecution.handleDeadDefender` and already conform. **Recorded divergence:** upstream iterates the target's live tile `Set` in insertion order; ours walks `TileSet` order, which changes which tiles become attacker-adjacent within a pass.
-10. **Win check** (§12): fallout-excluded denominator (inert until Tier D); the 170-minute limit is far beyond the env's `max_steps`.
-11. **Per-attack RNG** (§2.3): upstream seeds every attack with 123; the C sim draws from `e->rng`. Keep ours; record the divergence.
-12. **`relinquish`** (§5.2): needed by nukes; the C sim has no owner→unowned path yet.
-
-**Fix outside this list — attack-troops clamp (`eea12848`).** §7.3 already said attack troops clamp at 0 on every write; the C sim did not clamp, so an attack could end a tick negative and be read by `attack_start`'s cancel/combine before its next tick. Found by a new DEBUG invariant during 2a; the clamp fires ~11k times per 300-episode `hist_run` yet the harness output was unchanged.
-
-Rescales already applied in C (threshold 17 since the spawn-disk commit — was 16 — radius 4, min-dist 13, sigmoid debuffs dropped) remain valid decisions for the 48×48 training config; item 1 removes the sigmoid debuffs from source anyway.
+**Carry forward:**
+- **B-lite gold transfer has two call sites:** the dead-defender wipe (item 9) and `removeCluster` when the collected set is the player's whole territory (item 4).
+- **`on_map_edge` must count impassable-adjacent tiles** (§4) in the same commit that introduces impassable terrain.
+- **Recorded divergences:** per-attack RNG (item 11); iteration order — upstream walks JS `Set`s in insertion order in annexation cluster formation and the dead-defender pass, ours walks `TileSet` order.
+- Applied 48×48 rescales live in the project reference's rescale table.
 
 ---
 
@@ -851,141 +817,6 @@ Rescales already applied in C (threshold 17 since the spawn-disk commit — was 
 
 ---
 
-_§27 and §28 are carried verbatim from the `fc50009` edition (its §15 and §16). They describe the C code as it stands, which conforms to that edition, not this one; §25 lists the gap._
+## 27. Code
 
-## 27. Code state & API contract (openfront.h)
-
-**The sim lives in `openfront.h`, canonically at `~/summer26/PufferLib/ocean/openfront/openfront.h` and nowhere else (Sept 2026).** It began as a standalone `proto.c` answering one question — ticks/sec of the territory loop, gate ≥500k, passed — and is now the complete v1 mechanics implementation plus the PufferLib 5.0 binding, shipped as a single header. The dev tools live in `~/summer26/openfront` (`samuelpshi/openfront-proto`) and reach it by include path: `harness.c` (statistics + bench main, formerly `openfront.c`), `drive_test.c` (binding driver), `mk.sh` (builds all three binaries). One copy of the header, always — a duplicate drifts, and then the audited file is not the shipped file.
-
-```bash
-./mk.sh                          # of_dbg (tests + check_borders + hist_run), drive, of_fast
-./cxxcheck.sh                    # C++ syntax gate — the header is compiled as C++ by nvcc
-./build.sh openfront --cpu       # -> ./openfront, framework eval main + raylib render
-```
-Run `mk.sh` **and** `cxxcheck.sh` before pushing; `mk.sh` compiles the header as C, and the training path compiles it as C++. Two defects of that class shipped undetected in one day. Static asserts are spelled through `OF_STATIC_ASSERT` for this reason (`static_assert` under `__cplusplus`, `_Static_assert` otherwise).
-`-lm` is required (`powf`); missing it is a link error, not a compile error. `-DDEBUG` is load-bearing — without it `run_tests()` and `check_borders()` compile to nothing and the program passes silently.
-
-**MACRO RENAME — `W`/`H`/`N` ARE NOW `OF_W`/`OF_H`/`OF_N` (Sept 2026).** Mandatory, not cosmetic. The unscoped names collided with upstream: `src/algo.cu` and `src/pufferl.cu` use `N`, `H` and `B` as ordinary local variables and struct members, so the preprocessor rewrote upstream's own declarations into garbage (`int (48*48)`, `int 48`) and produced 100+ nvcc errors. The `--cpu` path never hit it because it includes different upstream sources. **Any unscoped macro in a PufferLib env header is a latent break for every contributor** — prefix everything. Rename verified mechanical: 49 lines, 50/50 insert/delete, full test suite and 300-episode statistics bit-identical afterward. Elsewhere in this spec, `N` in prose/formulas means the tile count `OF_N`.
-
-**ALL SIMULATION STATE LIVES IN `struct Env` (Aug 2026).** There are no simulation globals. Every function below takes `Env *e` as its first argument. This is the precondition for PufferLib, which steps envs under `#pragma omp parallel for` — a shared array or generation counter corrupts nondeterministically and only under parallel vec.
-
-**Signatures — exact, so cross-chat snippets don't transpose args:**
-```c
-#define OF_W 48
-#define OF_H 48
-#define OF_N (OF_W*OF_H)
-#define MAXP 9            /* players 1..8; 0 = unowned */
-#define HEAPCAP 2048      /* was 8*N; see note below */
-#define MAXATK 32
-#define START_TROOPS_HUMAN 25000.0f
-#define START_TROOPS_BOT   10000.0f
-
-/* pure — compile-time map shape only, no env */
-int  ref(int x, int y); int rx(int r); int ry(int r);
-int  neighbors(int r, int *out);            /* N,S,W,E order; returns count */
-int  neighbors8(int r, int *out);           /* 8-connectivity, annexation only; up to 8 */
-int  on_map_edge(int t);
-float within(float v, float lo, float hi);
-
-/* container-only — no env */
-void ts_init(TileSet*); void ts_add(TileSet*, int t);
-void ts_remove(TileSet*, int t); int ts_has(TileSet*, int t);
-void heap_init(Heap*);
-int  heap_pop(Heap *h);                     /* returns tile, -1 if empty */
-
-/* everything else takes Env* FIRST */
-void rng_seed(Env *e, unsigned int s);      /* splitmix32 scramble, then coerce 0 */
-int  rng_below(Env *e, int n);              /* [0, n) */
-int  rng_int(Env *e, int lo, int hi);       /* [lo, hi) — EXCLUSIVE, matches nextInt */
-int  is_land(Env *e, int t);          /* bit7 */
-int  is_ocean(Env *e, int t);         /* bit5 — water tiles only */
-int  is_shoreline(Env *e, int t);     /* bit6 — set on land AND water */
-int  magnitude(Env *e, int t);        /* bits0-4 */
-int  terrain_type(Env *e, int t);     /* 0 plains, 1 highland, 2 mountain; land only */
-int  is_shore(Env *e, int t);         /* land && shoreline */
-int  is_ocean_shore(Env *e, int t);   /* land && any 4-neighbour ocean; computed live */
-void heap_push(Env *e, Heap *h, int t, float p);  /* TILE FIRST, PRIORITY SECOND */
-void update_border(Env *e, int t);
-void conquer(Env *e, int p, int t);         /* the only territory mutation point */
-void players_reset(Env *e);
-float max_troops(Env *e, int p);
-float start_troops(Env *e, int p);          /* reads is_bot */
-void player_tick(Env *e, int p);
-int  find_free_slot(Env *e);
-void atk_push(Env *e, Attack *a, int t);
-void attack_start(Env *e, int attacker, int target, float troops);
-void dead_defender(Env *e, int attacker, int target);
-void attack_tick(Env *e, Attack *a);
-void annex_tick(Env *e, int p);             /* spec 9 driver, called after player_tick */
-int  largest_incoming_attacker(Env *e, int p);
-void bot_attack_random(Env *e, int p);
-void bot_tick(Env *e, int p);
-int  win_check(Env *e);
-int  spawn_place(Env *e, int p);
-void sim_init(Env *e, unsigned int seed);   /* zeroes the env; call once */
-void sim_reset(Env *e);                     /* per-episode entry point */
-int  sim_tick(Env *e);                      /* ONE tick; returns winner or 0 */
-void sim_run(Env *e, int nticks);
-```
-
-**`heap_push` now takes `Env*` as well**, so it can count refusals at cap. Three same-type arguments in a row (`Env*`, `Heap*`, then `int, float`) — the tile/priority transposition trap is unchanged, and `conquer(e, p, t)` is still player-before-tile.
-
-**Annexation scratch state** (all fields of `Env`, sized `N`; formerly file-static): `cl_visited`/`cl_gen`/`cl_stack`/`cl_comp`/`cl_start`/`cl_size` for border-component enumeration, and a **separate** `ff_visited`/`ff_gen`/`ff_stack`/`ff_take` for the territory fill. The two must not share a generation counter: `annex_remove` runs *inside* `annex_tick`'s component loop, so bumping one counter for both corrupts the enumeration mid-iteration. Both DFS stacks are bounded by `N` only because tiles are marked visited **before** push — move the mark after the push and both overflow.
-
-**Player type:** `unsigned char is_bot[MAXP]`, all 1 until the agent seat flips one to 0. Four handicaps read it: `maxTroops/3`, growth `×0.5`, terra-nullius attacker loss `mag/10` vs `mag/5`, and the `mag *= 0.7` human-attacking-bot modifier (vs-player branch only; terra nullius is not a Bot).
-
-**Annexation scheduling:** `long last_calc[MAXP]` (seeded with a per-seat offset so scans spread across ticks) and `long last_tile_change[MAXP]`, stamped for BOTH players inside `conquer`. `ticks` must be zeroed at the TOP of `sim_reset`, before spawn placement — otherwise spawn conquests stamp with the previous episode's counter and every player looks freshly-changed on tick 0.
-
-**`alive` is a cached `tiles.count > 0`** (source's `isAlive()` is exactly that). Kept as a field only so `player_tick`/`bot_tick`/`annex_tick` can skip dead seats. Maintained in **both** directions inside `conquer` — clearing it on loss alone left it wrong, and annexation can empty a player without going through `attack_tick` at all.
-
-Types: `terrain[N]` unsigned char, **packed byte** (bit7 land, bit6 shoreline, bit5 ocean, bits0–4 magnitude — see §3); `owner[N]` unsigned short; `TileSet {tiles[N], pos[N], count}` dense + reverse index, swap-and-pop, all O(1); `Player {TileSet tiles, border; float troops; int alive}`; `Heap {float pri[HEAPCAP]; int tile[HEAPCAP]; int count}` parallel-array min-heap; `Attack {int active, attacker, target; float troops; Heap heap}`.
-
-**`HEAPCAP` is 2048, down from `8*N`.** `sizeof(Env)` 4.89 MB → 0.89 MB, which matters because PufferLib `calloc`s one `Env` per agent slot before it knows how many envs it needs. Verified behaviour-identical (byte-for-byte episode statistics against an `8*N` build) and performance-identical (0.12%, inside run-to-run spread): peak occupancy is 440 across 3000 episodes and no push is ever refused, and allocation size is not working set — only ~8 attack slots are ever active, so the touched footprint is ~24 KB either way. `heap_peak` and `heap_full_drops` are `Env` fields so a cap hit is loud rather than a silently truncated frontier. **440 is a scripted-bot floor, not a bound** — re-read `heap_peak` once a trained policy is sprawling.
-
-Debug infra behind `#ifdef DEBUG` (release stubs `#define check_borders() ((void)0)` etc.): `ts_check`, `check_borders` (full border-invariant + phantom-tile scan), `run_tests()` = ts_test / conquer_test / blob_test (solid 12×12 rects — catches missing interior `ts_remove` in update_border) / hole_test (3×3 bite — catches missing neighbor-update loop in conquer) / heap_test (full-sort + random push/pop with heap-property scan) / annex_test (3×3 enclave inside a 12×12 gets annexed; two 12×12 blobs sharing one front do not — covers both directions of the bbox test) / attack_test / **isolation_test**.
-
-**`isolation_test` is the one that guards the refactor.** Three envs run three full episodes each alone and are hashed; the same seeds are then rerun round-robin one tick at a time — the access pattern PufferLib's vec loop produces — and must hash identically. Any surviving shared array, counter, or generation stamp shows up here and nowhere else in the suite. Run it after any change touching env state.
-
-`check_borders()` asserts the border invariant, phantom tiles, `alive == (tiles.count > 0)`, non-negative troops, and non-NaN troops. Extend it first whenever a new invariant is discovered — it is cheaper than the bug.
-
-**Done & verified — v1 mechanics are complete.** Coordinate layer, terrain gen, TileSet, O(1) incremental border maintenance, `conquer`, min-heap, `Attack`, `attack_start` with cancellation and combination, `atk_push` with the real priority formula, real budget/combat math, `attack_tick`, troop growth, dead-defender wipe, elimination flag, spec §12 spawn placement, xorshift32 RNG, bot drivers with retaliation, annexation (§9 complete including the `isEnclosed` gate), win check, and the `Env` struct refactor.
-
-Verification standard currently met, and the bar for any future change: clean under `-Wall -Wextra` both modes; ASan+UBSan clean over 300 episodes with `check_borders()` every 50 ticks, and over 20 episodes with it every *single* tick; deterministic across runs; 0 spawn failures; 0 heap drops; all seven tests pass.
-
-**The binding is built and moved into the fork (Sept 2026), pending audit.** `openfront.h` now carries the PufferLib 5.0 interface on top of the sim: `puf_init` / `puf_reset` / `puf_step` / `puf_log` / `puf_render` / `puf_close`, plus `compute_observations`, `sorted_neighbors`, `apply_action`, `add_log`. `OBS_SIZE 31`, `ACT_SIZES {7}`, `NUM_ATNS 1`. Design decisions and measurements are in `openfront_project_reference.md` §5–6; this file stays the mechanics reference.
-
-Two mechanics-adjacent points that belong here:
-
-- **`apply_action` sends `troops / 5`** — spec §5's `attackAmount` default. There is no troop-commitment head, because §5 step 5 combination makes a repeat attack on the same target absorb the first, so action repeat supplies commitment. Combination is a prerequisite, not a fidelity nicety.
-- **`annex_by[MAXP]`** was added to `Env`, stamped with the capturer inside `annex_remove`. It exists so the Log can attribute annexations to the agent seat rather than to all eight players — the diagnostic for whether the flat observation's inability to see geometry is a real ceiling.
-
-**Not implemented, deliberately:** the spatial map observation and its custom encoder, action masking (`action_mask = NULL`; invalid neighbour slots fall through as noop), cities/gold, impassable terrain, exact per-attack frontier TileSets, retreat as an action index (§13, still a candidate), naval attacks, rivers. All Phase 2 or later.
-
-**Real map gen is in progress (Sept 2026), procedural not real-map.** Decisions settled, do not relitigate:
-- **Procedural simplex noise**, `simplex.h` vendored into `ocean/openfront/` from `ocean/battle/` (byte-identical copy is the upstream convention — battle, nmmo3 and terraform each carry one). Copy **battle's** octave wrapper, not terraform's: terraform initialises `max_value = FLT_MIN`, the smallest *positive* float, not a lower bound. Both versions contain a C99 VLA (`float frequencies[octaves]`) that C++ rejects — `cxxcheck.sh` fails on a verbatim copy, so use a fixed-size array.
-- **Not real maps**, for two reasons: OpenFrontIO is AGPL-3.0 and shipping their map assets is a different act from deriving mechanics; and a real coastline downsampled to 2,304 tiles destroys exactly the straits and isthmuses that make real maps worth having. The clean later path is generating bins offline from public-domain geodata into `resources/openfront/*.bin` — in-repo precedent exists (`laser_puzzle`, `boxoban`, `tower_climb` all load offline-generated level banks).
-- **The swap stays cheap only if the noise field never escapes the fill function.** One function fills `terrain[]` and nothing else; every later pass consumes the filled array. The real-map path supplies bit 7 from a `fread` and passes 3–5 run unchanged. Do not keep the noise field around for river sources, spawn scoring, or obs features — if elevation is needed later it is *in* `terrain[]`, which is the other reason the magnitude encoding had to land first.
-- **Islands and lakes are kept**, not drowned or filled. Both would be workarounds for a boat-less v1 and both get torn out when naval lands. Spawn is restricted to the largest land component instead. Keeping lakes forces the §13 `isShore` / `isOceanShore` split in the same commit.
-- **Land fraction 0.65**, quadratic edge falloff, one dominant continent. Higher than it looks like it needs to be: the radius-4 spawn disk requires every centre to sit ≥4 tiles from water, which a fractal coastline erodes far harder than the land fraction alone suggests.
-- **Magnitude mapping takes no new knob.** `mag = clamp(round(30 * (noise - land_thresh) / (noise_max - land_thresh)), 0, 30)`. Land is the upper tail of a roughly Gaussian field, so its density decreases with elevation and a straight linear window gives majority-Plains for free — structurally the same as the generator's clamped `(Blue - 140) / 2`. Histogram the tier split before adding any parameter.
-- **Dedicated `map_rng`**, seeded from a `map_seed` config key defaulting to a fixed nonzero value, so every env trains the same map and the comparison against 0.086 stays interpretable. Map gen must not consume `e->rng` — the procedural path uses a stream the real-map path will not, and episode determinism must not shift when that swaps. Per-episode maps become a config flip once spatial obs exists.
-- **48x48 held** through the comparison run. Changing geometry and resolution together makes the result unattributable. See project reference §6.4 for what map size actually costs.
-
-**Phase plan:** 0 = this prototype. 1 = **done pending audit** — action space, action repeat, and the PufferLib 5.0 binding (single header: **no `binding.c`, and no `<env>.c` either** — header-only envs are supported and upstream's `admiral` deleted its own `.c`), moved into `ocean/openfront/` Sept 2026 and building through `build.sh --cpu`. 2 = train it; reward/obs iteration, real map gen (procedural simplex, islands and lakes kept), spatial obs only if the annexation diagnostic justifies it. 3 = self-play harness, bots become held-out eval. 4 = raylib render, sweep, PR. Draft PR opens around end of Phase 2.
-
-**Prior art:** `djmango/openfront-ai` — PPO self-play wrapping the real TS engine, ~2,100 game-ticks/sec after heavy optimization; needed a learned spatial autoencoder to compress obs. Two takeaways: strongest argument for the native C sim, and compress the map spatially / bypass exact scalars in obs design.
-
----
-
-
-## 28. Working conventions (cross-chat)
-
-- **Claude writes the game simulation code; Sam audits it. Puffer binding setup is done together.** (Standing decision, Aug 2026 — this replaces the earlier convention where Sam wrote all core sim code.) The audit is the load-bearing half: Joseph reviews PRs on stream and asks implementation questions, so anything Sam cannot explain unprompted is not done. Annexation in particular — be able to explain why the cluster fill runs over the border set rather than the territory, and why the enemy bbox contains the cluster bbox rather than the reverse, without looking.
-- Claude verifies any handed-over code compiles and passes in the container before handing it over.
-- **Hand over whole functions, never excerpts.** Excerpt boundaries are exactly where adjacent required lines get dropped; this produced three clean-compiling defects in one pass (project reference §7). The same rule applies to these markdown files: replace whole sections, not lines.
-- Recurring bug classes to watch: `=` vs `==`, `.` vs `->`, missing braces, missing return, struct-by-value vs pointer, Python-isms, nested function defs, **tile-number vs player-id confusion** (everything is a bare int: tiles are `t`/`nb[k]`/heap contents; players are `p`/`attacker`/`target`/`owner[...]`), and **`heap_push` arg transposition** (int/float convert silently both ways — the compiler will not catch it).
-- Placeholder economics before real economics. One variable per experiment. Don't run phases ahead of where the code is.
-- **A refactor is not verified until a one-variable control is bit-identical.** When a structural change lands alongside behavioural ones, revert the behavioural ones and diff against the pre-change build before layering them back one at a time. "Direction and rough magnitude match" is not verification; it is where a transposed argument hides. Note that a *stale global reference* is not the risk after a globals→struct move — the globals are gone, so it won't compile. The risk is a transposed argument or wrong index, which compiles clean and passes every invariant.
-- **Don't reason about cache from `sizeof`.** A 5.5× reduction in `sizeof(Env)` produced 0.12% throughput change, because untouched `calloc` pages are never faulted in and the actual working set was ~24 KB either way. Measure the touched footprint, not the allocation.
-- **Code that is never executed is not verified.** The standalone harness calls no `puf_*` function, so the whole binding compiled and proved nothing until `drive_test.c` existed to drive it — and that harness found two clean-compiling defects on its first run. Whenever a new interface is added, add the thing that exercises it in the same pass.
-- Sam doesn't read TypeScript and doesn't need to — this spec is the interface to the source. Terse prose, no filler, settled things stay settled.
+The C API is the header, `ocean/openfront/openfront.h`; read it for signatures. Implementation notes, settled decisions and working conventions are in the project reference (§3, §4, §7). No copy of the API lives in this file.
