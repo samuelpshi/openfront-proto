@@ -49,15 +49,15 @@ Tier B-lite is exactly:
 | Defense-post attack modifier (posts do not shoot at this anchor) | §17.1 |
 | Bot structure scrapping (bots mark captured structures for deletion) | §14 step 2, §15.7 |
 
-Out of PR #1: upgrades (§15.6, open — see below), every other unit type, and Tiers C–H. Later PRs, in likely order: nukes (Tier D — the spectacle, second PR), then naval (C) and rail/Factories (F) together with real-scale maps, where water pathing and 110-tile rail geometry mean something. At 48×48 every City would sit within station range of every Factory and the rail network would be degenerate. Diplomacy (E) only makes sense with self-play.
+Out of PR #1: upgrades (§15.6, decided out 25 Sept — see below), every other unit type, and Tiers C–H. Later PRs, in likely order: nukes (Tier D — the spectacle, second PR), then naval (C) and rail/Factories (F) together with real-scale maps, where water pathing and 110-tile rail geometry mean something. At 48×48 every City would sit within station range of every Factory and the rail network would be degenerate. Diplomacy (E) only makes sense with self-play.
 
 **Open decisions for Tier B-lite (record the answers in the project reference):**
 
-1. **Economy vs episode length.** A human earns 100 gold/tick; the first City costs 125k = 1,250 ticks against a ~1,900-tick episode. At upstream prices structures barely occur. Scale costs or income, or lengthen episodes — a documented rescale either way (§24.1).
-2. **Defense-post radius.** 30 tiles covers most of a 48×48 map. Rescale with the map, like the wipe threshold.
-3. **Structure min-distance** (15, §15.5) — same question, smaller stakes.
-4. **Action space.** Discrete-7 → Discrete-9 (`build_city`, `build_post`) with automatic placement: City on the deepest interior tile, post on the border facing the most dangerous neighbour. Extends the settled Discrete-7 decision; does not reopen it.
-5. **Upgrades.** Probably out (a second City is the same decision as a City upgrade); confirm.
+1. **Answered 25 Sept** (goldMultiplier 10; see the project reference §4 rescale table). **Economy vs episode length.** A human earns 100 gold/tick; the first City costs 125k = 1,250 ticks against a ~1,900-tick episode. At upstream prices structures barely occur. Scale costs or income, or lengthen episodes — a documented rescale either way (§24.1).
+2. **Answered 25 Sept** (6; see the project reference §4 rescale table). **Defense-post radius.** 30 tiles covers most of a 48×48 map. Rescale with the map, like the wipe threshold.
+3. **Answered 25 Sept** (3; see the project reference §4 rescale table). **Structure min-distance** (15, §15.5) — same question, smaller stakes.
+4. **Answered 25 Sept** (Discrete-13 with per-neighbour post targeting; see the project reference §4). **Action space.** Discrete-7 → Discrete-9 (`build_city`, `build_post`) with automatic placement: City on the deepest interior tile, post on the border facing the most dangerous neighbour. Extends the settled Discrete-7 decision; does not reopen it.
+5. **Answered 25 Sept** (out; see the project reference §4). **Upgrades.** Probably out (a second City is the same decision as a City upgrade); confirm.
 
 ---
 
@@ -774,7 +774,7 @@ Every one of these is tuned for maps of 10^5–10^6 land tiles (the smallest shi
 | MIRV range / spread / count | 1500 / 55 / 350 | §21.6 |
 | Bézier minimum height | 50 | §18 |
 
-The previous edition's §14 rescale policy stands for the territorial core — implement as written, then rescale knowingly, and record every applied rescale in the project reference's table. **Coupled pairs move together or not at all:** the maxTroops floor with start troops; the wipe threshold with the annex-always threshold. For Tiers B–D the practical conclusion is that the full game needs real-scale maps (≥ ~125k tiles); shrinking every constant proportionally is a second game, not a port. **PR #1 exception:** Tier B-lite (§0) ships at 48×48, so the defense-post range, structure min-distance and the cost/income-vs-episode-length ratio are rescaled knowingly — each is an open decision in §0 and gets a row in the project reference's rescale table once made.
+The previous edition's §14 rescale policy stands for the territorial core — implement as written, then rescale knowingly, and record every applied rescale in the project reference's table. **Coupled pairs move together or not at all:** the maxTroops floor with start troops and the City troop bonus; the wipe threshold with the annex-always threshold. For Tiers B–D the practical conclusion is that the full game needs real-scale maps (≥ ~125k tiles); shrinking every constant proportionally is a second game, not a port. **PR #1 exception:** Tier B-lite (§0) ships at 48×48, so the defense-post range, structure min-distance and the cost/income-vs-episode-length ratio are rescaled knowingly — each was an open decision in §0 and now has a row in the project reference's rescale table (all answered 25 Sept).
 
 ### 24.2 Not simulated
 

@@ -1,3 +1,4 @@
+#include <assert.h>
 #include "openfront.h"
 
 // harness
@@ -219,6 +220,151 @@ static void spawn_sweep(void) {
     }
 }
 
+static int cmp_dbl_asc(const void *a, const void *b) {
+    double x = *(const double*)a, y = *(const double*)b;
+    return (x > y) - (x < y);
+}
+
+/* Nearest-rank percentile of a sorted array. */
+static double pct(const double *v, long n, int k) {
+    long i = (long)ceil(k / 100.0 * (double)n) - 1;
+    if (i < 0) i = 0;
+    return v[i];
+}
+
+static void pct_line(const char *name, double *v, long n) {
+    if (n == 0) { printf("%-18s n=0\n", name); return; }
+    qsort(v, (size_t)n, sizeof(double), cmp_dbl_asc);
+    printf("%-18s n=%-7ld p25 %7.2f  p50 %7.2f  p75 %7.2f  p90 %7.2f\n",
+           name, n, pct(v, n, 25), pct(v, n, 50), pct(v, n, 75), pct(v, n, 90));
+}
+
+/* Front geometry for B-lite post range / min-dist. Runs the same episodes as
+   hist_run (sim_run is a bare loop of sim_tick; sampling in between is
+   read-only), and every 100 ticks measures, for each alive p and neighbour q,
+   front(p,q) = p's tiles 4-adjacent to a q tile.
+   len_e = (p tile, q tile) adjacent pairs: sorted_neighbors' shared count.
+   len_t = distinct front tiles. Same neighbour set; len_e >= len_t.
+   Longest front = sorted_neighbors' slot 0 (max len_e, ties to lowest q).
+   Centroid and ext are over distinct front tiles. */
+static void fronts_run(int episodes, int nticks, unsigned int seed) {
+    Env *e = (Env*)malloc(sizeof(Env));
+    long cap_p = (long)episodes * (nticks / 100) * (MAXP - 1);
+    long cap_f = cap_p * (MAXP - 2);
+    double *buf = (double*)malloc(sizeof(double) * (size_t)(5*cap_p + 3*cap_f));
+    if (!e || !buf) { printf("out of memory\n"); exit(1); }
+    double *tiles_v = buf;
+    double *lng_e = tiles_v + cap_p, *lng_t = lng_e + cap_p;
+    double *lng_x = lng_t + cap_p, *nfr_v = lng_x + cap_p;
+    double *all_e = nfr_v + cap_p, *all_t = all_e + cap_f;
+    double *all_x = all_t + cap_f;
+    long np = 0, nl = 0, nf = 0, beyond5 = 0;
+    sim_init(e, seed);
+
+    long wins = 0, total_len = 0, survivors = 0, elim = 0;
+    for (int ep = 0; ep < episodes; ep++) {
+        sim_reset(e);
+        for (int tick = 0; tick < nticks; tick++) {
+            if (sim_tick(e)) break;
+            if (e->ticks % 100 != 0) continue;
+            for (int p = 1; p < MAXP; p++) {
+                if (!e->players[p].alive) continue;
+                tiles_v[np++] = e->players[p].tiles.count;
+
+                int len_e[MAXP], len_t[MAXP];
+                double sx[MAXP], sy[MAXP], ext[MAXP];
+                memset(len_e, 0, sizeof(len_e));
+                memset(len_t, 0, sizeof(len_t));
+                memset(sx, 0, sizeof(sx));
+                memset(sy, 0, sizeof(sy));
+                memset(ext, 0, sizeof(ext));
+                TileSet *b = &e->players[p].border;
+                for (int i = 0; i < b->count; i++) {
+                    int t = b->tiles[i], nb[4], seen[MAXP];
+                    int n = neighbors(t, nb);
+                    memset(seen, 0, sizeof(seen));
+                    for (int k = 0; k < n; k++) {
+                        int o = e->owner[nb[k]];
+                        if (o == 0 || o == p) continue;
+                        len_e[o]++;
+                        if (seen[o]) continue;
+                        seen[o] = 1;
+                        len_t[o]++;
+                        sx[o] += rx(t);
+                        sy[o] += ry(t);
+                    }
+                }
+                for (int q = 1; q < MAXP; q++) if (len_t[q]) {
+                    sx[q] /= len_t[q];
+                    sy[q] /= len_t[q];
+                }
+                for (int i = 0; i < b->count; i++) {
+                    int t = b->tiles[i], nb[4];
+                    int n = neighbors(t, nb);
+                    for (int k = 0; k < n; k++) {
+                        int o = e->owner[nb[k]];
+                        if (o == 0 || o == p) continue;
+                        double dx = rx(t) - sx[o], dy = ry(t) - sy[o];
+                        double d = sqrt(dx*dx + dy*dy);
+                        if (d > ext[o]) ext[o] = d;
+                    }
+                }
+
+                int out[MAXP], shared[MAXP];
+                int n_sn = sorted_neighbors(e, p, out, shared);
+                int n_fr = 0;
+                for (int q = 1; q < MAXP; q++) {
+                    if (!len_e[q]) continue;
+                    all_e[nf] = len_e[q];
+                    all_t[nf] = len_t[q];
+                    all_x[nf] = ext[q];
+                    nf++;
+                    n_fr++;
+                }
+                assert(n_sn == (n_fr < ACT_NEIGHBORS ? n_fr : ACT_NEIGHBORS));
+                for (int k = 0; k < n_sn; k++) assert(shared[k] == len_e[out[k]]);
+                nfr_v[np-1] = n_fr;
+                if (n_fr > ACT_NEIGHBORS) beyond5 += n_fr - ACT_NEIGHBORS;
+                if (n_fr == 0) continue;
+                int q0 = out[0];
+                lng_e[nl] = len_e[q0];
+                lng_t[nl] = len_t[q0];
+                lng_x[nl] = ext[q0];
+                nl++;
+            }
+        }
+#ifdef DEBUG
+        printf("ep %3d len %4ld env %016llx map %016llx\n", ep, e->ticks,
+               (unsigned long long)env_hash(e), (unsigned long long)map_hash(e));
+#endif
+        if (e->ticks < nticks) wins++;
+        total_len += e->ticks;
+        for (int p = 1; p < MAXP; p++) {
+            if (e->players[p].tiles.count > 0) survivors++;
+            else elim++;
+        }
+    }
+    printf("episodes %d: wins %ld (%.1f%%), mean length %.0f ticks, eliminated %.1f%%\n",
+           episodes, wins, 100.0*wins/episodes, (double)total_len/episodes,
+           100.0*elim/(elim+survivors));
+    printf("=== fronts: seed %u, sampled every 100 ticks, alive players ===\n",
+           seed);
+    printf("player-samples %ld, with >=1 front %ld, fronts %ld, "
+           "fronts beyond slot 5 %ld\n", np, nl, nf, beyond5);
+    printf("len_e = sorted_neighbors' shared count (adjacent pairs); "
+           "len_t = distinct tiles\n");
+    pct_line("longest len_e", lng_e, nl);
+    pct_line("longest len_t", lng_t, nl);
+    pct_line("longest ext", lng_x, nl);
+    pct_line("all len_e", all_e, nf);
+    pct_line("all len_t", all_t, nf);
+    pct_line("all ext", all_x, nf);
+    pct_line("tiles", tiles_v, np);
+    pct_line("fronts/player", nfr_v, np);
+    free(buf);
+    free(e);
+}
+
 static void map_dump(int n, unsigned int seed) {
     for (int m = 0; m < n; m++) {
         Env *e = (Env*)malloc(sizeof(Env));
@@ -245,6 +391,8 @@ int main(int argc, char **argv) {
         spawn_sweep();
     } else if (argc > 2 && strcmp(argv[1], "hist") == 0) {
         hist_run(300, 2000, (unsigned int)atoi(argv[2]));
+    } else if (argc > 2 && strcmp(argv[1], "fronts") == 0) {
+        fronts_run(300, 2000, (unsigned int)atoi(argv[2]));
     } else {
         hist_run(300, 2000, 42);
     }
