@@ -5,3 +5,5 @@ of_fast
 drive
 *.dSYM/
 .DS_Store
+of_*
+!of_*.c

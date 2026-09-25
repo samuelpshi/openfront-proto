@@ -69,7 +69,7 @@ soft 80 / hard 100 col, 4-space indents, don't split into more files.
 - `sizeof(Env)` is a budget — `src/pufferl.cu:1000` does
   `calloc(total_agents, sizeof(Env))`, then line 1008 `realloc`s down to
   `num_envs * sizeof(Env)` where `num_envs = total_agents / num_agents`.
-  Currently 948,488 bytes (~948 KB). Large per-env arrays go behind pointers.
+  Currently 985,352 bytes (~985 KB). Large per-env arrays go behind pointers.
 - `envs[i].rng` is assigned the env index **before** `puf_init` runs. Seed
   scrambling is mandatory.
 - Macros are `OF_W` / `OF_H` / `OF_N`. Unscoped names collided with upstream.
@@ -147,8 +147,8 @@ Explain the reasoning, not just the patch.
 
 ## Reference docs
 
-`openfront_env_spec.md` — mechanics; wins on mechanics disputes.
-`openfront_project_reference.md` — state, decisions, training/trainer ops,
+`docs/openfront_env_spec.md` — mechanics; wins on mechanics disputes.
+`docs/openfront_project_reference.md` — state, decisions, training/trainer ops,
   §6.4 for map size and `sizeof(Env)` scaling.
 Upstream source of truth: `github.com/openfrontio/OpenFrontIO`, AGPL-3.0.
 Mechanics are derived, never transliterated.
@@ -210,8 +210,8 @@ answered.
 Tier A progress (spec §25):
 - #1 DetMath + FP_CONTRACT -- done 21 Sept.
 - `297cad49` tests use local xorshift, not libc `rand()`.
-- `1f3eae15` attack troops clamped at 0 (spec §7.3) + DEBUG invariant.
-- #2a float -> double sim math -- done `9f303628`, verified Mac/x86.
+- `eea12848` attack troops clamped at 0 (spec §7.3) + DEBUG invariant.
+- #2a float -> double sim math -- done `39db150f`, verified Mac/x86.
 - Next: harness prints `env_hash` per episode (dev repo, before 2b); then
   #2b int64 player troops; then combat rewrite, annexation, attack init,
   dead-defender check, spawn disk/phase, bot river crossing.
