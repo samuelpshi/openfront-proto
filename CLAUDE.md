@@ -1,5 +1,9 @@
 # summer26 — OpenFront RL env
 
+**Before starting work, read `docs/openfront_project_reference.md` §1.** Current
+state, the baseline (and its sha) and next steps live there and nowhere else.
+`docs/history.md` is an archive; don't load it.
+
 ## Repos (two, don't confuse them)
 
 - `~/summer26/PufferLib` — fork `samuelpshi/PufferLib`, branch `5.0`.
@@ -69,7 +73,7 @@ soft 80 / hard 100 col, 4-space indents, don't split into more files.
 - `sizeof(Env)` is a budget — `src/pufferl.cu:1000` does
   `calloc(total_agents, sizeof(Env))`, then line 1008 `realloc`s down to
   `num_envs * sizeof(Env)` where `num_envs = total_agents / num_agents`.
-  Currently 985,352 bytes (~985 KB). Large per-env arrays go behind pointers.
+  Large per-env arrays go behind pointers. Current size: reference §1; scaling: §6.3.
 - `envs[i].rng` is assigned the env index **before** `puf_init` runs. Seed
   scrambling is mandatory.
 - Macros are `OF_W` / `OF_H` / `OF_N`. Unscoped names collided with upstream.
@@ -79,27 +83,25 @@ soft 80 / hard 100 col, 4-space indents, don't split into more files.
 
 - Comparisons: use `cmp` (with exit code) and `shasum -a 256`. Never diff exit
   status.
-- Baseline hashes are sha256 of `of_dbg`'s **stdout**
+- Hashes are sha256 of `of_dbg`'s **stdout**
   (`./of_dbg > out.txt; shasum -a 256 out.txt`), never of the binary. ld64
   embeds a random LC_UUID and ad-hoc signature per link, so binary hashes
   change on every rebuild.
 - FP contraction: `openfront.h` opens with `#pragma STDC FP_CONTRACT OFF` and
   closes with `#pragma STDC FP_CONTRACT DEFAULT`. Never add `-ffp-contract`
   or `-ffast-math` to `build.sh`. `mk.sh` carries `-ffp-contract=off`.
-  Since 2a the pragma is load-bearing: without it, `-ffp-contract=fast`
-  changes `hist_run` output.
+  Rationale: reference §4.
 - No libm transcendentals in `openfront.h` — use
   `det_exp`/`det_log`/`det_pow`/`det_atan2`. `floor`/`sqrt` are fine (exact).
 - Warnings: `mk.sh` and `cxxcheck.sh` carry `-Wfloat-conversion
   -Wimplicit-float-conversion`. Apple clang's `-Wfloat-conversion` alone does
-  NOT catch double->float narrowing. Known out-of-scope hit: `float lf =
-  dict_get(...)` in `puf_init` (fix to `double` in a cleanup commit).
-- Numeric model: sim math is `double` (Tier A #2a). Player troops become
-  `int64_t` in 2b, written only through `troops_set`/`troops_add`/
-  `troops_remove` -- never assign `players[p].troops` directly. Attack troops
-  stay `double`, clamped at 0 on every write (spec §7.3). Heap priorities stay
-  `float` by design (every key value is exact in float).
-- On the Mac, run `bash ./build.sh`, not `./build.sh` (`/bin/bash` 3.2).
+  NOT catch double->float narrowing. Open hits: reference §5.3.
+- Numeric model (spec §2, reference §3): sim math is `double`. Player troops are
+  `int64_t`, written only through `troops_set`/`troops_add`/`troops_remove` --
+  never assign `players[p].troops` directly. Attack troops stay `double`,
+  clamped at 0 on every write (spec §7.3). Heap priorities stay `float` by design.
+- On the Mac, run `/opt/homebrew/bin/bash ./build.sh openfront --cpu` (bash >= 4
+  required; `/bin/bash` 3.2 fails on `${ENV^^}`). Reference §2.
 - x86 recheck bundles are built from the **committed** tree, with the Mac
   stdout and a MANIFEST (file hashes + fork HEAD). Never hand-copy a header
   into a bundle.
@@ -109,16 +111,12 @@ soft 80 / hard 100 col, 4-space indents, don't split into more files.
 A refactor is not verified until a one-variable control is **bit-identical**.
 "Direction and rough magnitude match" is where a transposed argument hides.
 
-Baseline (Tier A complete, PufferLib 5.0 @ 4a3d2848, Mac arm64 == x86_64):
-hist_run(300, 2000, 42): wins 54 (18.0%), mean length 1920, eliminated 64.2%
-annexations 3857 (12.86/ep), tiles moved 29773 (7.7/event)
-spawn failures 0, heap peak 209/2048, heap drops 0
-sizeof(Env) = 985352
-of_dbg stdout sha256 bce152dee0f18893e17e7b06ac7e0635ad94b318d1e99663debb30156f1d2c0d
-Behaviour-changing commits: ./sweep.sh <before-dir> <after-dir>, 20 seeds unpaired, |Δ| < 2 SE.
+Behaviour-neutral = unchanged `of_dbg` stdout sha. The baseline and its sha are
+in reference §1. Behaviour-changing commits: `./sweep.sh <before-dir> <after-dir>`,
+20 seeds unpaired, |Δ| < 2 SE (reference §4).
 
-**Precision changes can't be bit-identical**, so they need a different control
-(protocol from 2a): (1) lockstep trace of episode 0 against the previous build,
+**Precision changes can't be bit-identical**, so they need a different control:
+(1) lockstep trace of episode 0 against the previous build,
 per-tick troops at `%.17g` -- relative diff should sit at float ULP level until
 the first tile or attack-set divergence; normalise attack troops by the attack's
 start troops, not current troops (near-zero residuals fake large relative
@@ -130,10 +128,8 @@ Report divergence from a stated acceptance target. Do not paper over it, and do 
 adjust the target to match the output. `isolation_test` must stay bit-identical
 across 3 envs x 3 episodes.
 
-`hist_run`'s 2000 ticks equals training's `max_steps 200 x action_repeat 10`, so the
-numbers are directly comparable to the dashboard. Bots-only resolution was 24.7% pre-Tier-A
-(5.0% pre-map-gen; mostly because the 0.8 land-share win bar shrank with land
-area); it moves with every Tier A commit. Do not compare agent win rate against the old 0.086.
+`hist_run`'s 2000 ticks equals training's `max_steps 200 x action_repeat 10`, so
+its numbers are directly comparable to the dashboard.
 
 When changing an encoding, enumerate every **write** as well as every read. A
 partial migration that leaves comparisons against the old representation is worse
@@ -141,78 +137,45 @@ than a no-op — it silently inverts them.
 
 ## Working convention
 
-Sam audits everything. Joseph reviews contributor env PRs on stream and asks
-implementation questions, so anything Sam can't explain unprompted isn't done.
-Explain the reasoning, not just the patch.
+Sam audits everything; explain the reasoning, not just the patch (reference §7).
+
+Edit rules, every time:
+
+- Read the signature, not the call site. Transposition traps: `heap_push(e, h,
+  tile, pri)` is tile first; `conquer(e, p, t)` is player first;
+  `rng_int(e, lo, hi)` is `[lo, hi)`. Tiles (`t`, `nb[k]`) and players (`p`,
+  `attacker`, `target`, `owner[...]`) are all bare ints: the compiler won't help.
+- Hand over whole functions, never excerpts.
+- Multi-site edits go through a script that asserts each anchor matches exactly
+  once.
+- `./mk.sh && ./cxxcheck.sh` must both pass before any push.
+- Never `git add -A` in the fork (`~/summer26/PufferLib`): it carries another
+  session's uncommitted edits.
+- C bug classes to watch: `=` vs `==`, `.` vs `->`, struct by value vs pointer,
+  missing braces/return, integer division, `continue` in a nested loop, C99 VLAs.
+- Code that is never executed is not verified: add the thing that exercises a
+  new interface in the same pass.
 
 ## Reference docs
 
 `docs/openfront_env_spec.md` — mechanics; wins on mechanics disputes.
-`docs/openfront_project_reference.md` — state, decisions, training/trainer ops,
-  §6.3 for map size and `sizeof(Env)` scaling.
+`docs/openfront_project_reference.md` — state (§1), tooling (§2), header notes
+  (§3), decisions and rescales (§4), open items (§5), training (§6, §6.3 for map
+  size and `sizeof(Env)` scaling), conventions (§7), claim discipline (§8).
 Upstream source of truth: `github.com/openfrontio/OpenFrontIO`, AGPL-3.0.
 Mechanics are derived, never transliterated.
 
-## Steps
+## Annexation and terrain-entry rules
 
-Step 4 (shore split) — DONE, behaviour-neutral.
-`annex_surrounded`: largest path gates on `is_ocean_shore` (PlayerExecution.ts:374),
-others on `is_shore` (:432).
-On the largest path the gate is redundant: any lake-shore tile has an unowned water
-4-neighbour, and the largest path bails on owner==0 (source does the same). Kept for
-source fidelity; hist_run bit-identical.
-`annex_shore_test` uses real geometry only — never set a shore bit without a water
-4-neighbour.
-Do not touch `annex_enclosed` (`!is_land` already matches isEnclosed treating lakes
-as exits).
-
-Step 5 (spawn sweep) — status: DONE, no change. Land pinned at 1498 by quantile threshold; largest
-component 1491-1498. 0/8000 hard failures, 6.9% of maps relax once, max
-depth 1. Spawn constants unchanged. spawn_sweep copy verified tile-identical
-to sim_reset over seeds 0-999.
-`./of_fast spawn` — seeds 0-999, 8 players, land_frac=0.65.
-```
-hard spawn failures: 0/8000 slots (0.00%)
-maps with any relaxed spawn: 69/1000 (6.9%)
-relaxation depth histogram: depth=0 931 maps, depth=1 69 maps
-total spawn attempts: 275891 (mean 275.9/map, mean 34.5/player)
-largest-comp size: min=1491  p1=1495  median=1498
-5 worst maps (relax_spawns DESC, comp_size ASC):
-  seed  429: hard=0 relax=2 depth=1 tries=2015 comp=1498
-  seed  330: hard=0 relax=1 depth=1 tries=984  comp=1496
-  seed  718: hard=0 relax=1 depth=1 tries=928  comp=1496
-  seed  881: hard=0 relax=1 depth=1 tries=893  comp=1496
-  seed   10: hard=0 relax=1 depth=1 tries=1127 comp=1497
-```
-
-Step 6 (terrain audit) — status: DONE. Invariant: owned => land, by induction — only
-unowned-tile entries are attack seed/refill (is_land filtered) and spawn disk
-(spawn_disk_ok: bounds, land, unowned). conquer's water check is a DEBUG trap only.
-All territory denominators use land_tiles. TN predicates land-gated. Removed two
-dead is_land guards (atk_push, attack_tick pop). Style note for pre-PR pass: spawn
-disk shape duplicated in spawn_disk_ok and spawn_place.
-
-Step 7 (training on terrain) — DONE. 100M on terrain. 1x128 perf 0.330 (mean, seeds
-73/74) vs 0.315 open grid — terrain did not move the ceiling. 2x512 perf 0.348,
-adopted (no SPS cost). Eliminated ~45% on all runs regardless of capacity: ceiling
-is obs. Seed variance ~±0.013 perf; single-run deltas <0.03 are noise. Win rates not
-comparable across the terrain change.
-Policy baseline is now `hidden_size 512`, `num_layers 2`.
-
-Plan status: map-gen steps 1-7 done. Spatial obs is deferred to the PR after
-PR #1.
-
-**PR #1 scope (decided 24 Sept): Tier A + Tier B-lite** -- gold income, City,
-Defense Post (spec §0). Factories, nukes, naval, diplomacy are later PRs. Open
-decisions for B-lite are listed in spec §0; don't start B-lite code until they're
-answered.
-
-Tier A progress (spec §25):
-- #1 DetMath + FP_CONTRACT -- done 21 Sept.
-- `297cad49` tests use local xorshift, not libc `rand()`.
-- `eea12848` attack troops clamped at 0 (spec §7.3) + DEBUG invariant.
-- #2a float -> double sim math -- done `39db150f`, verified Mac/x86.
-- Next: harness prints `env_hash` per episode (dev repo, before 2b); then
-  #2b int64 player troops; then combat rewrite, annexation, attack init,
-  dead-defender check, spawn disk/phase, bot river crossing.
-- Flip the header comment `fc50009` -> `7defd24` in the last Tier A commit.
+- `annex_surrounded`: the largest path gates on `is_ocean_shore`
+  (PlayerExecution.ts:374), the others on `is_shore` (:432). On the largest path
+  the gate is redundant (any lake-shore tile has an unowned water 4-neighbour, and
+  that path bails on owner==0) but is kept for source fidelity.
+- `annex_shore_test` uses real geometry only: never set a shore bit without a
+  water 4-neighbour.
+- Do not touch `annex_enclosed` (`!is_land` already matches isEnclosed treating
+  lakes as exits).
+- Owned => land (reference §4). `conquer`'s water check is a DEBUG trap only;
+  every new tile-taking path filters `is_land` at entry. All territory
+  denominators use `land_tiles`; TN predicates are land-gated.
+- Spawn sweep: `./of_fast spawn` (seeds 0-999, 8 players, land_frac=0.65).
