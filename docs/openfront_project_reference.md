@@ -4,7 +4,7 @@ Companion to `openfront_env_spec.md`. The spec is the **mechanics** reference: f
 
 This file records **current state only**. Session narratives, superseded baselines and closed investigations live in `docs/history.md`, which is not loaded into chats. When something changes, edit it in place and append the story to history. Don't leave SUPERSEDED banners here.
 
-Last updated: **25 Sept 2026 — Tier A complete** (`4a3d2848`, verified Mac↔x86).
+Last updated: **25 Sept 2026 — perf pass** (`fa64934c`, `3e26237d`).
 
 ---
 
@@ -12,7 +12,7 @@ Last updated: **25 Sept 2026 — Tier A complete** (`4a3d2848`, verified Mac↔x
 
 The env lives in `ocean/openfront/openfront.h` and `config/openfront.ini` on `samuelpshi/PufferLib`, branch `5.0`. It trains end to end on a Vast 3090. The header conforms to upstream `7defd24` for the Tier A scope, the territorial core (spec §25). **Nothing has been trained on the Tier A build yet.** The policy baseline is 2×512. The last training result (21 Sept, pre-Tier-A) put the ceiling at observation, not terrain and not capacity (§6).
 
-**Next:** the perf pass (§5.1), then the Tier B-lite decisions (§5.2), then B-lite itself, then a baseline retrain (100M, two seeds), then the draft PR. PR #1 is Tier A plus gold, City and Defense Post (spec §0).
+**Next:** the Tier B-lite decisions (§5.2), then B-lite itself, then a baseline retrain (100M, two seeds), then the draft PR. PR #1 is Tier A plus gold, City and Defense Post (spec §0).
 
 **Tier A commits on `5.0`, oldest first.** These follow the clamp `eea12848` and the 2a commit `39db150f`.
 
@@ -25,24 +25,26 @@ The env lives in `ocean/openfront/openfront.h` and `config/openfront.ini` on `sa
 | `9b542489` | #4a, annex capturer |
 | `d6aef90c` | #4b, hole-aware largest cluster |
 | `4a3d2848` | header anchor `fc50009` → `7defd24` |
+| `fa64934c` | perf: LTB lookup table |
+| `3e26237d` | perf: troop-cap pow table |
 
 **History was rewritten once.** `5.0` was `filter-branch`ed to fix the author email. Two hashes changed: `1f3eae15` → `eea12848` and `9f303628` → `39db150f`; `297cad49` kept its hash. The trees are identical. Use the new hashes everywhere.
 
-**Dev repo:** `samuelpshi/openfront-proto` at `57dcfa8`, with `docs/` and `CLAUDE.md` tracked.
+**Dev repo:** `samuelpshi/openfront-proto`, with `docs/` and `CLAUDE.md` tracked.
 
-**Baseline: the acceptance target for any behaviour-neutral change.** It comes from `hist_run(300, 2000, 42)` at `4a3d2848`. It is byte-identical on Mac arm64 and x86_64 under both x86 builds, with no masking, and stdout includes the per-episode `ep … env … map …` lines.
+**Baseline: the acceptance target for any behaviour-neutral change.** It comes from `hist_run(300, 2000, 42)` at `3e26237d`, and stdout includes the per-episode `ep … env … map …` lines. Apart from the `sizeof(Env)` line, that stdout is byte-identical (`cmp`) to `4a3d2848`'s, which was byte-identical on Mac arm64 and x86_64 under both x86 builds, with no masking. The x86 recheck has not been re-run at `3e26237d`.
 
 ```
 wins 54 (18.0%), mean length 1920, eliminated 64.2%
 annexations 3857 (12.86/ep), tiles moved 29773 (7.7/event)
 spawn failures 0, heap peak 209/2048, heap drops 0
-sizeof(Env) = 985352
-of_dbg stdout sha256 bce152dee0f18893e17e7b06ac7e0635ad94b318d1e99663debb30156f1d2c0d
+sizeof(Env) = 1022240
+of_dbg stdout sha256 0a87cd753ecc4e6eca039b8810b615cac4fc6c60961c852c88cbb5b77c6251ea
 ```
 
 Single-seed wins swing by ±9 with nothing changed (seed sd ≈ 9 over 20 seeds). Read behaviour changes off `sweep.sh`, never off this block. Don't compare win rates across the terrain change: the 0.8 land-share bar fell from ~1693 tiles to ~1198.
 
-**Throughput:** ~525–535k ticks/sec (`of_fast bench`, M3 Pro, `-O2`), down from ~583k before 1b. The old 1.02M figure (`phase1-baseline`) is pre-Tier-A and must not be quoted. Of the drop, 1b's share (−9%) is attributed, and the rest is not (§5.1).
+**Throughput:** ~830k ticks/sec (`of_fast bench`, M3 Pro, `-O2`, median of 5, interleaved A/B) after the perf pass; ~724–750k before it. Bench-bisect attributed the Tier A loss to DetMath (−8.7%, `61514968`) and 1b (−9.9%, `c4faca4a`). The two table commits recovered 1b fully (+12.3% vs −9.9%) and DetMath partly (~+3% vs −8.7%; the growth `det_pow` remains). An earlier ~525k figure was not reproduced: reruns of the same commit gave ~724–750k. Likely measured under load. The 1.02M `phase1-baseline` predates map gen (different workload) and is not comparable.
 
 **Map:** procedural simplex, 48×48, land pinned at exactly **1498** tiles (`2304 − (int)(0.35 × 2304)`). The terrain split over 200 maps is Plains 61.4 / Highland 32.1 / Mountain 6.5, with 1.2 land components and 5.2 lakes on average. Islands and lakes are kept, and spawns are restricted to the largest land component. A 1000-seed × 8-player spawn sweep gave 0 hard failures; 6.9% of maps relax min-distance once, with max depth 1.
 
@@ -74,6 +76,8 @@ Single-seed wins swing by ±9 with nothing changed (seed sd ≈ 9 over 20 seeds)
 - **`harness.c` modes.** `hist <seed>` runs one seed. Under DEBUG, `hist_run` prints `ep / len / env_hash / map_hash` per episode, which bisects divergences to an episode.
 - **The x86 check runs through `bundle_x86.sh` and Claude.** The bundle ships no raylib, so Claude links an 8-symbol trapping stub (`InitWindow`, `DrawRectangle`, …) that `hist_run` never calls. `-Wconversion` is checked on clang-18, because Apple clang 15 reports 6 warnings where clang-18 reports 36. Compare warning sets keyed on message plus source text, so line shifts don't matter.
 - **Hash stdout, never the binary.** ld64 randomises LC_UUID on every link.
+- **Bench hygiene.** Build every binary first, then bench with nothing else running: no builds, no other sessions, and check `ps -Ao pcpu,comm -r` for background daemons pinning a core (`BTLEServer` held one at 100% during the perf pass). Interleave A/B runs and report the median of 5.
+- **`./drive` must run clean after any binding change.** Its output lines are recorded in §3; compare against them.
 - **zsh gotchas.** Unquoted `$VAR` doesn't word-split, so compile lines built in variables go through `bash <<'EOF'` or `${=VAR}`. `setopt interactivecomments` is in `~/.zshrc`.
 - **One working tree, one session.** Keep `~/summer26/PufferLib` on `5.0`, since `mk.sh` hardcodes that path. Binpack gets its own worktree (`git worktree add ../PufferLib-binpack binpack`). `resources/constellation/experiments.ini` carries another session's uncommitted edit, so never `git add -A` in the fork.
 
@@ -101,6 +105,7 @@ Single-seed wins swing by ±9 with nothing changed (seed sd ≈ 9 over 20 seeds)
 - **One `Attack` covers one `(attacker, target)` pair** across every shared front. Combination makes that uniqueness structural.
 - **`HEAPCAP` is 2048**, with a peak of ~210 since 1a. **`MAXATK` is 32**, with a peak of 7 under bots; self-play will push that up, so revisit it in Phase 3.
 - **The spawn-scaled thresholds** are `WIPE_TILES` and `ANNEX_TILES`, both `SPAWN_TILES/3 = 17`.
+- **The framework callocs `Env` and calls `puf_init`, never `sim_init`.** Anything filled once at init (the `lt_sig` and `cap_pow` tables) goes in `tables_init(e)`, which both call. `drive_test` asserts the tables on the `puf_init` path.
 
 **Debug infrastructure.** Everything below sits behind `DEBUG`. `check_borders()` asserts the border invariant, phantom tiles, `alive` consistency, and that troops are non-negative and non-NaN. The test suite is `ts_test`, `conquer_test`, `blob_test`, `hole_test`, `heap_test`, `attack_test`, `isolation_test`, `annex_shore_test`, `annex_hole_test` and the `attack_logic` golden-vector test. The golden vectors are 5 cases computed with libm at relative tolerance 1e-9; case 4 uses a 300k-tile defender so the territory bonus actually bites. Unit tests use a local seeded xorshift, never `rand()`. When a new invariant turns up, extend `check_borders()` first; it's cheaper than the bug.
 
@@ -108,7 +113,53 @@ Single-seed wins swing by ±9 with nothing changed (seed sd ≈ 9 over 20 seeds)
 
 `Log` records `perf`, `win` (land share > 0.8 at log time), `annexations` (the agent seat's own, via `annex_by[p]`), then `won / eliminated / rival_won / timeout`, then `n`. The framework divides each field by `n`, so the four outcome fields are fractions that sum to 1.0, which makes a free dashboard invariant. `won` (`winner == p` from `win_check`, which runs on `ticks % 10`) is not redundant with `win`; when they disagree, that's itself diagnostic. The outcome branch order is died → `winner == p` → `winner != 0` → cap, so elimination wins over `rival_won`.
 
-**`drive_test.c` stands in for `pufferl.cu`.** It is the only thing that executes the binding path. It sets `rng = <env index>` before `puf_init`, as the framework does, drives random actions, and asserts no NaNs, observations in [0,1] and episodes that terminate. When a binding invariant turns up, extend it first.
+**`drive_test.c` stands in for `pufferl.cu`.** It is the only thing that executes the binding path. It sets `rng = <env index>` before `puf_init`, as the framework does, and passes `land_frac = 0.65` and `map_seed = 0` from `config/openfront.ini`. It failed on the missing key from `e26522b7` (map gen, which made `puf_init` read both) until `80e82c6`. After `puf_init` it asserts `lt_sig` and `cap_pow` exactly at n = 0, 1, `OF_N/2`, `OF_N`; n = 1 is the first entry a calloc'd table gets wrong. It then drives random actions and asserts no NaNs, observations in [0,1] and episodes that terminate. When a binding invariant turns up, extend it first.
+
+Usage is `./drive [num_agents] [agent_is_bot] [episodes]`, default `1 0 30`, one config per invocation over 4 envs. Loop over configs in bash, not zsh: zsh passes an unquoted `$a = "1 1"` as a single argument, and `atoi` silently reads only the first number.
+
+Baseline at `3e26237d`. All three configs are byte-identical to `4a3d2848` (built with the two keys added).
+
+`./drive` (1 agent, human seat):
+
+```
+num_agents=1 agent_is_bot=0
+  episodes 120 over 4 envs, 959 puf_steps
+  mean episode length 31.6 decisions (max_steps 200)
+  reward range [-0.0527, 1.2003]
+  obs range    [0.0000, 1.0000]
+  terminals fired 120
+  action histogram: 556 544 570 532 566 560 508
+  env0 log: n=30 perf=0.8200 ep_return=1.7852 ep_len=31.3 win=30 annex=2.0
+drive ok
+```
+
+`./drive 1 1` (the training default in `config/openfront.ini`):
+
+```
+num_agents=1 agent_is_bot=1
+  episodes 120 over 4 envs, 5740 puf_steps
+  mean episode length 188.7 decisions (max_steps 200)
+  reward range [-1.1335, 0.0774]
+  obs range    [0.0000, 1.0000]
+  terminals fired 122
+  action histogram: 3285 3271 3272 3253 3300 3298 3281
+  env0 log: n=30 perf=0.0000 ep_return=-1.0347 ep_len=55.6 win=0 annex=0.8
+drive ok
+```
+
+`./drive 8 1 10` (8 seats, self-play shape):
+
+```
+num_agents=8 agent_is_bot=1
+  episodes 40 over 4 envs, 1925 puf_steps
+  mean episode length 186.2 decisions (max_steps 200)
+  reward range [-1.1075, 1.1155]
+  obs range    [0.0000, 1.0000]
+  terminals fired 327
+  action histogram: 8885 8634 8684 8820 8805 8903 8869
+  env0 log: n=12 perf=0.1795 ep_return=-0.2719 ep_len=89.9 win=2 annex=1.8
+drive ok
+```
 
 **Deliberately not built:** spatial obs, a custom encoder (`openfront.cu`), `openfront_net.h`, action masking (`action_mask = NULL`, so invalid neighbour slots fall through as noop), retreat as an action, impassable terrain, boats and rivers.
 
@@ -164,14 +215,9 @@ Every applied rescale gets a row here.
 
 ## 5. Open items
 
-### 5.1 Perf pass (in progress)
+### 5.1 Perf pass (done)
 
-**Goal:** recover throughput without moving the sha off `bce152de…`.
-
-1. **Bench-bisect** `of_fast bench` over the last 25 header commits against today's `harness.c`, taking the median of 3. The script is in the 25 Sept handoff. Early commits may not build, which is fine as long as the commits around the drop do. The suspects are DetMath (`det_pow` twice per player per tick in `player_tick`), the map-gen commit (land went from 2116 to 1498, so the work per tick changed), and 2a/2b.
-2. **LTB lookup table.** Store `s[n] = det_sigmoid(det_log(n), 2.5, det_log(300000))` for n = 0..`OF_N` in `Env` (~18 KB), filled at init. The three bonus evaluations then become `1 − depth·s[n]`. This is bit-identical by construction. Keep `attack_logic` pure by passing it `s` or the values. This targets 1b's −9%.
-3. Other headroom: `max_troops` is recomputed up to 3× per bot decision.
-4. **Re-measure before quoting any number.**
+Perf pass done (`fa64934c`, `3e26237d`). Remaining headroom: the growth `det_pow(troops, 0.73)`, once per player per tick, which can't be tabled.
 
 ### 5.2 Tier B-lite decisions (answer before any code)
 
@@ -263,8 +309,8 @@ Checkpoints are on the Mac at `~/summer26/ckpts/step7/run{0..4}_*.bin`: run0 is 
 - **Config:** `config/openfront.ini` is read, and `[env]` keys reach `puf_init`. Set `device = cuda`, which is committed; with `cpu` the GPU sat at 3%.
 - **Checkpoints:** `checkpoint_dir` and `checkpoint_interval` live in `[base]`. The interval counts **epochs**, not steps: 100M ≈ 1525 epochs. The final epoch always saves. Weights are flat fp32 `.bin` files.
 - **Eval is a Mac job.** The Mac `--cpu` binary loads and renders Vast `.bin` checkpoints (tested 21 Sept) with `./openfront <ckpt.bin>`, run from the repo root. The binary reads `config/openfront.ini` from the cwd, so the policy shape must match the checkpoint. `--headless --eval_episodes=N` prints metrics. In the render, the agent is seat 1 in red. `./puffer eval` segfaults when headless on Vast, and under `xvfb-run` it prints nothing. Don't spend instance time on it.
-- **Throughput:** ~290K SPS sustained (steps ÷ uptime). The dashboard `SPS` reads high. 100M takes ~6 min and 500M ~30 min. The env is 81–95% of the loop and the GPU idles, so if learning stalls the fix is reward, obs or capacity, never throughput. This figure predates Tier A. Expect it lower on the current header, since the sim bench roughly halved; re-measure on the retrain.
-- **Memory:** `pufferl.cu` allocates `(total_agents / num_agents) × sizeof(Env)`. `sizeof(Env)` is 985,352 bytes. The 20 Sept decomposition (at 938 KB) was ~179 B per scaling tile plus ~525 KB fixed (32 `Attack` slots, each with a heap); 4b's scratch arrays and 1a's border bitsets have added to both since. Larger grids are reachable without a refactor: 128×128 is ~3.5 GB of host RAM at 1024 agents, with step time ~7× slower. 48×48 is a held experimental constant, not a memory wall. The honest answer to "why 48×48" on stream is that the territory representation is O(P·N) and hasn't been refactored yet. Upstream's smallest shipped map is ~350×350.
+- **Throughput:** ~290K SPS measured pre-Tier-A. The sim bench is now ~830k vs ~750k+ then (different workloads), so re-measure SPS on the retrain rather than projecting. The dashboard `SPS` reads high; use steps ÷ uptime. The env is 81–95% of the loop and the GPU idles, so if learning stalls the fix is reward, obs or capacity, never throughput.
+- **Memory:** `pufferl.cu` allocates `(total_agents / num_agents) × sizeof(Env)`. `sizeof(Env)` is 1,022,240 bytes. The 20 Sept decomposition (at 938 KB) was ~179 B per scaling tile plus ~525 KB fixed (32 `Attack` slots, each with a heap); 4b's scratch arrays and 1a's border bitsets have added to both since. Larger grids are reachable without a refactor: 128×128 is ~3.5 GB of host RAM at 1024 agents, with step time ~7× slower. 48×48 is a held experimental constant, not a memory wall. The honest answer to "why 48×48" on stream is that the territory representation is O(P·N) and hasn't been refactored yet. Upstream's smallest shipped map is ~350×350.
 
 ---
 
@@ -308,7 +354,7 @@ Claim only what is built and shipped. No feature lists; mention only mechanics t
 **True but stale; refresh after the retrain and the perf pass:**
 
 - The ~35% average land share at 100M (2×512: 0.354 / 0.342), against random play at 0.4%. It's "nearly 3× an even split": by symmetry, the bots' average can't exceed 12.5%, and the agent plays with the same handicaps.
-- The throughput figure. **Don't quote any number** until it has been re-measured on the shipping header.
+- The throughput figure: ~830k ticks/sec on the current header (M3 Pro, single core); re-measure after B-lite before quoting.
 
 **Never write:**
 

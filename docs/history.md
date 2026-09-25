@@ -944,3 +944,49 @@ Two mechanics-adjacent points that belong here:
 - **Don't reason about cache from `sizeof`.** A 5.5× reduction in `sizeof(Env)` produced 0.12% throughput change, because untouched `calloc` pages are never faulted in and the actual working set was ~24 KB either way. Measure the touched footprint, not the allocation.
 - **Code that is never executed is not verified.** The standalone harness calls no `puf_*` function, so the whole binding compiled and proved nothing until `drive_test.c` existed to drive it — and that harness found two clean-compiling defects on its first run. Whenever a new interface is added, add the thing that exercises it in the same pass.
 - Sam doesn't read TypeScript and doesn't need to — this spec is the interface to the source. Terse prose, no filler, settled things stay settled.
+
+---
+
+## 25 Sept 2026 — perf pass
+
+**Bisect.** `of_fast bench` over every header commit from `d884e6a9` to `4a3d2848` (M3 Pro, `-O2 -ffp-contract=off`, today's `harness.c`, median of 3). Commits before map gen don't build against the current harness.
+
+| Commit | ticks/sec | Change |
+|---|---|---|
+| `d884e6a9` … `c0ba9474` | BUILD-FAIL | pre-map-gen headers (5 commits) |
+| `e26522b7` | 915018 | map gen |
+| `1874b8ff` | 914978 | shore gate split |
+| `48754b77` | 888134 | dead `is_land` guards |
+| `61514968` | 810596 | DetMath (−8.7%) |
+| `297cad49` | 814522 | tests xorshift |
+| `eea12848` | 810198 | attack clamp |
+| `39db150f` | 839683 | 2a double |
+| `84ebc825` | 825647 | 2b `int64_t` |
+| `5175a70e` | 835935 | spawn disk |
+| `908b785a` | 835602 | 1a border set |
+| `c4faca4a` | 752915 | 1b combat (−9.9%) |
+| `9b542489` | 759183 | 4a capturer |
+| `d6aef90c` | 749394 | 4b hole selection |
+| `4a3d2848` | 749555 | anchor flip |
+
+Noise is about ±3% at median-of-3 (compare the near-no-op steps); only DetMath and 1b clear it. End to end, `e26522b7` → `4a3d2848` is −18%. After the perf pass, `3e26237d` benches ~830k, about 9% under `e26522b7`: the remaining gap is the growth `det_pow` plus sub-noise steps.
+
+**Commits** (both bit-identical: `of_dbg` stdout `cmp`-equal apart from the `sizeof(Env)` line; warning sets unchanged):
+
+- `fa64934c` LTB table. `lt_sig[n] = lt_sigmoid(n) = det_sigmoid(det_log((double)n), 2.5, det_log(300000))`, n = 0..`OF_N`. The three bonuses (`lab` on attacker tiles with depth 0.7, `ldb` on defender tiles with 0.3, `lasb` on attacker tiles with 0.73) share k and m, so one table serves all three; `1.0 - depth * s` stays in `attack_logic`, which now takes `atk_sig` / `def_sig` and stays pure. `large_territory_bonus` was deleted rather than kept with a `double` argument, so an old int-taking call can't compile silently. The golden test calls `lt_sigmoid` directly (case 4 is n = 300000). Exhaustive old-vs-new check, n = 0..2304 × 3 depths: 0 / 6915 bit mismatches at `-O0` and `-O2`. `lt_sig[OF_N]` is 5.2e-6, so at 48×48 the bonus is within ~4e-6 of 1. `sizeof(Env)` 985352 → 1003800 (+18440 array, +8 padding).
+- `3e26237d` troop-cap table. `cap_pow[n] = det_pow((double)n, 0.6)`, read by `max_troops` (all five callers go through it). Growth `det_pow(troops, 0.73)` is untouched, since troops are unbounded. Exhaustive check against the old `max_troops`, both bot flags: 0 / 4610. `sizeof(Env)` → 1022240. `of_dbg` stdout sha256 `0a87cd753ecc4e6eca039b8810b615cac4fc6c60961c852c88cbb5b77c6251ea`.
+
+**Benches** (`of_fast bench`, interleaved A B, 5 each, all binaries built first; `BTLEServer` held one core at 100% throughout):
+
+| Pair | Runs (ticks/sec) | Median |
+|---|---|---|
+| `4a3d2848` | 717900, 723648, 745300, 743399, 717128 | 723648 |
+| `fa64934c` | 810572, 823042, 822451, 778780, 812954 | 812954 (+12.3%) |
+| `fa64934c` | 656585, 798888, 778925, 802921, 809509 | 798888 |
+| `3e26237d` | 805277, 774479, 828453, 837011, 857558 | 828453 (+3.7%) |
+
+The second pair is noisy: `3e26237d` won 4 of 5, and `fa64934c`'s median drifted 813k → 799k between sessions. Call the troop-cap gain ~2–4%. The ~525k figure recorded at Tier A was not reproduced: `4a3d2848` gave 717–745k here.
+
+**The `puf_init` catch.** The framework callocs `Env` and calls `puf_init`, never `sim_init`. `puf_init` can't call `sim_init`, because its memset would wipe `rng` and `agents[]`. Tables filled only in `sim_init` would have been all zeros in training: a flat 100000 troop cap and every LTB at 1.0. `of_dbg` would still have passed, since the harness only uses `sim_init`. Both inits now call `tables_init(e)`, and `drive_test` asserts the tables after `puf_init` (`80e82c6`). Negative control: with `tables_init` removed from `puf_init`, `drive` fails at n = 1.
+
+**`drive` was broken.** From `e26522b7` (20 Sept, map gen), `puf_init` read `land_frac` and `map_seed` through `dict_get`, which exits on a missing key; `drive_test.c` never set them. `81b078ab` (21 Sept) added the keys to `config/openfront.ini`, which fixed the framework path but not `drive`, whose Dict is built by hand. So the binding path went unexercised from 20 Sept until `80e82c6`. During the perf pass it was checked with a scratch copy carrying the two keys: output was identical at `4a3d2848`, `fa64934c` and `3e26237d`.
