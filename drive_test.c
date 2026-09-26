@@ -74,13 +74,16 @@ int main(int argc, char **argv) {
     unsigned int seed = 12345;
     long steps = 0, terminals_seen = 0, ep_done = 0;
     float rmin = 1e9f, rmax = -1e9f, omin = 1e9f, omax = -1e9f;
-    long act_hist[7] = {0};
+    int act_sizes[] = ACT_SIZES;
+    int n_act = act_sizes[0];
+    long act_hist[32] = {0};
+    if (n_act > 32) { printf("FAIL: %d actions > 32\n", n_act); return 1; }
     long len_sum = 0;
 
     while (ep_done < (long)episodes * NENV) {
         for (int a = 0; a < total_agents; a++) {
             seed = seed*1103515245u + 12345u;
-            int action = (seed >> 16) % 7;
+            int action = (int)((seed >> 16) % (unsigned int)n_act);
             acts[a * NUM_ATNS] = (float)action;
             act_hist[action]++;
         }
@@ -114,7 +117,7 @@ int main(int argc, char **argv) {
     printf("  obs range    [%.4f, %.4f]\n", (double)omin, (double)omax);
     printf("  terminals fired %ld\n", terminals_seen);
     printf("  action histogram:");
-    for (int i = 0; i < 7; i++) printf(" %ld", act_hist[i]);
+    for (int i = 0; i < n_act; i++) printf(" %ld", act_hist[i]);
     putchar('\n');
 
     Dict *out = mkdict();
@@ -126,6 +129,10 @@ int main(int argc, char **argv) {
            dict_get(out, "episode_length") / dict_get(out, "n"),
            dict_get(out, "win"),
            dict_get(out, "annexations")    / dict_get(out, "n"));
+    printf("  env0 builds/ep: cities=%.2f posts=%.2f noops=%.2f\n",
+           dict_get(out, "cities_built") / dict_get(out, "n"),
+           dict_get(out, "posts_built")  / dict_get(out, "n"),
+           dict_get(out, "build_noops")  / dict_get(out, "n"));
 
     if (omin < 0.0f || omax > 1.0f) {
         printf("FAIL: observations outside [0,1]\n");

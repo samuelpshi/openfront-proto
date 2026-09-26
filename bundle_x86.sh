@@ -10,6 +10,14 @@ cp "$D/harness.c" "$D/mk.sh" "$B/"
 cp "$F/ocean/openfront/openfront.h" "$F/ocean/openfront/simplex.h" "$B/ocean/openfront/"
 cp "$F/src/pufferenv.h" "$F/src/ini.h" "$B/src/"
 (cd "$D" && ./mk.sh >/dev/null && ./of_dbg > "$B/after_mac.txt")
+# clang-18 warning list for the bundled (committed) header, compiled as C the way mk.sh does
+C18=/opt/homebrew/opt/llvm@18/bin/clang
+[ -x "$C18" ] || { echo "clang-18 missing: brew install llvm@18"; exit 1; }
+(cd "$B" && "$C18" --version | head -1 > clang18_warnings.txt && \
+    "$C18" -fsyntax-only -Wall -Wextra -Wconversion -Wfloat-conversion -Wimplicit-float-conversion \
+    -DDEBUG -I ocean/openfront -I src -I "$F/vendor" -I "$F/raylib-5.5_macos/include" harness.c \
+    >> clang18_warnings.txt 2>&1)
+echo "clang-18 warnings: $(grep -c ': warning:' "$B/clang18_warnings.txt")"
 (cd "$B" && shasum -a 256 $(find . -type f) > MANIFEST.txt)
 git -C "$F" rev-parse HEAD >> "$B/MANIFEST.txt"
 rm -f ~/Downloads/of_x86check.zip && (cd /tmp && zip -qr ~/Downloads/of_x86check.zip of_x86check)
