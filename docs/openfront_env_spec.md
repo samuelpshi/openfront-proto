@@ -417,7 +417,7 @@ Acts only on ticks where `ticks % attackRate == attackTick`; deactivates when de
 
 **Every later decision, in order:**
 1. Accept every incoming alliance request; for each alliance where exactly one side has asked to extend, agree to extend (§22.2).
-2. If the delete cooldown allows (§15.7), mark the first structure it owns for deletion — bots scrap structures they capture.
+2. If the delete cooldown allows (§15.7), mark the first structure it owns for deletion — bots scrap structures they capture. Only structure types count (`Structures`, `Game.ts:233`), and ones already marked are skipped (`TribeExecution.ts:86-93`). Under-construction structures are eligible. The **first decision** is the TN attack alone and returns before this step (`TribeExecution.ts:58`). Deciding only *adds* a `DeleteUnitExecution`. The mark, and the refusal checks, happen at that execution's `init` at the end of the tick (§3, §15.7).
 3. **Traitor punish:** pick a random non-friendly traitor among `nearby()` (none if alliances are disabled). With probability 1/3 (1/6 if currently friendly with it — breaking the alliance first) → `sendAttack(traitor)`; stop if sent.
 4. While `neighborsTerraNullius`: if any entry of `nearby()` is terra nullius → `sendAttack(TN)`, stop if sent; else clear the flag permanently. Falls through on failure.
 5. `attackRandomTarget()`:
@@ -435,6 +435,8 @@ Acts only on ticks where `ticks % attackRate == attackTick`; deactivates when de
 
 ```
 useReserve = target is a player and not (a Bot that owns structures)
+             // "owns structures" = units().some(Structures.has): includes under
+             // construction and marked-for-deletion (AiAttackBehavior.ts:1002)
 ratio      = useReserve ? reserveRatio : expandRatio
 land:  troops = attacker.troops − maxTroops · ratio
 boat:  troops = attacker.troops / 5
@@ -497,7 +499,8 @@ Nation-only extensions (bot-attack sizing, send caps that keep a fraction of the
 
 Preconditions (`canBuildUnitType`): unit not disabled; `gold ≥ cost`; player alive (except warheads); and for player-issued builds, not in the spawn phase.
 
-- **Structures:** on the first tick, resolve a spawn tile (§15.5); `buildUnit` deducts the cost **immediately** and creates the unit; if the build time is > 0 the unit is `underConstruction` for that many ticks (ownership follows the unit if it is captured mid-build), then its type-specific execution starts. Under-construction structures do not act, do not count in `unitCount`, and do not add city troop capacity, but they do block placement.
+- **Structures:** on the first tick, resolve a spawn tile (§15.5); `buildUnit` deducts the cost **immediately** and creates the unit; if the build time is > 0 the unit is `underConstruction` (ownership follows the unit if it is captured mid-build), then its type-specific execution starts.
+  - **Exact timing.** A build issued on tick *t* adds a `ConstructionExecution`, initialised at the end of *t* (§3). Its first `tick`, on *t+1*, validates, deducts and creates the unit with `ticksUntilComplete = D` (`ConstructionExecution.ts:65-73`). Each later tick first checks `ticksUntilComplete === 0` → complete (`:91`), else decrements (`:97`). So the structure is created on *B = t+1* and completes on **B + D + 1**: City *t+22*, DefensePost *t+52*. The execution sits after the player executions in list order, so creation and completion both land after that tick's `PlayerExecution`s. Under-construction structures do not act, do not count in `unitCount`, and do not add city troop capacity, but they do block placement.
 - **Non-structures** (warship, atom, hydrogen, MIRV): the construction execution completes instantly and hands off to the unit's own execution, which pays the cost when it creates the unit. Stacked nuke purchases (`amount > 1`) launch one `NukeExecution` each.
 
 ### 15.5 Placement
@@ -516,7 +519,9 @@ Upgradable: City, Port, Factory, MissileSilo, SAMLauncher. Finding the unit: the
 ### 15.7 Capture, deletion and death
 
 - **Capture on territory change:** §6.1 step 2 (the *old* owner's execution does it). Structures change owner keeping their level; DefensePosts are destroyed instead.
-- **Voluntary deletion (`DeleteUnitExecution`):** the unit must be the player's, active, on the player's own land, outside the spawn phase, and the per-player delete cooldown (300 ticks) must have elapsed. The unit is *marked* and deleted 300 ticks later (`deletionMarkDuration`); a capture in between clears the mark.
+- **Voluntary deletion (`DeleteUnitExecution`):** the unit must be the player's, active, on the player's own land, outside the spawn phase, and the per-player delete cooldown (300 ticks) must have elapsed. The unit is *marked* and deleted 300 ticks later (`deletionMarkDuration`); a capture in between clears the mark (`setOwner` → `clearPendingDeletion`, `UnitImpl.ts:231-232`).
+  - **Exact timing.** All checks, and the mark, run in `init` at the end of the requesting tick *T* (`DeleteUnitExecution.ts:24-67`, `GameImpl.ts:501`). A failed check refuses without recording the cooldown. The mark sets `deletionAt = T + 300` (`UnitImpl.ts:313`). The execution's `tick` deletes when `ticks − deletionAt > 0` (`:322`), i.e. on **T + 301**, after that tick's player executions.
+  - **Cooldown:** `canDeleteUnit` is `ticks − lastDeleteUnitTick ≥ 300` (`PlayerImpl.ts:1167`), with `lastDeleteUnitTick` starting at **−1** (`:171`). So the first delete is possible on tick 299, and the next 300 ticks after the last recorded one.
 - **Owner death:** §6.1 step 3.
 - **Nukes:** every non-missile unit within the blast (§21.4) is deleted.
 

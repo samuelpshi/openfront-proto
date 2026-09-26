@@ -1007,3 +1007,31 @@ Upstream check at `7defd24`: the "never sent an attack" test is the `ATTACK_INDE
 
 Verification: stdout with the `env` hashes, the `sizeof` line and the new `gold ok` line stripped is `cmp`-identical to `3e26237d`'s (318 lines). The new sha is `0a769dcf…` and `sizeof(Env)` is 1022312 (+72: `gold` adds 8 per player; `sent_attack` fills the 4 bytes of padding after `alive`. 9 players × 8). All three `drive` configs are byte-identical. x86_64 under Rosetta (`-O0` and `-O2` DEBUG) matches the Mac output byte for byte, and the Linux x86 bundle (both builds) matched.
 
+## 25 Sept 2026 — B-lite step 2a: structures (`61a71536`)
+
+City and DefensePost, with nothing issuing builds yet. The pieces:
+- storage and costs (`min(unitsOwned, unitsConstructed)`)
+- `build_structure` on a resolved tile
+- capture in `player_tick` (step 2, before death)
+- the City bonus inside `max_troops` before `/3`
+- the post modifier at the `attack_logic` call site (completed posts, `d² ≤ 36`)
+- bot scrapping and the §14.2 expand-ratio case
+
+**Item 5:** the zero-city bonus term is `+0.0`, which is exact for `m > 0`. No special case was needed. **Item 7:** upstream's "owns structures" is `units().some(Structures.has)`, which includes under-construction and marked units.
+
+The first version followed the brief's timing: `last_delete_tick` 0, delete at mark + 300, complete after D ticks. Reading upstream showed three off-by-ones, and the decision was to match upstream on all three:
+- `lastDeleteUnitTick` starts at −1.
+- Deletion when `ticks − (mark + 300) > 0`, i.e. mark + 301, with the mark applied at `DeleteUnitExecution.init`, end of tick.
+- Construction checks for 0 before decrementing, so D + 1.
+
+These moved into `structures_end_tick`, after the player loop, where upstream's later-added executions run. A bot's scrap is now a request resolved at end of tick: it's refused without spending the cooldown if the structure was captured that tick. The spec §14, §15.4 and §15.7 now carry exact timings with line refs. The amended commit replaced the unpushed `0bdc042b`.
+
+Verification:
+- **Mutation check.** 17 planted mutations; 16 caught.
+  - The survivor is the end-of-tick cooldown recheck. It's an equivalent mutant: the request and its resolution are in the same tick, so the recheck can't fail. It's kept for fidelity.
+  - A first pass let "end pass not wired into `sim_tick`" survive. A `sim_tick` construction case was added.
+- **Behaviour.** Stdout, stripped of `env` hashes, `sizeof` and test lines, is `cmp`-identical to gold. New sha `60dc1afb…`, `sizeof(Env)` 1030808.
+- **Drives.** All three are byte-identical.
+- **x86.** Batched with commit 2: one bundle will cover both.
+- **Warnings.** clang-22 `-Wconversion` gives the same warning set as `7b4e6d01` (23). A new unused-function warning for `build_structure` in the non-DEBUG builds lasts until commit 2.
+
