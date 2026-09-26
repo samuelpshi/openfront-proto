@@ -35,7 +35,7 @@ Each tier is playable on its own and depends only on tiers above it.
 | G | Nation AI | §26 + separate file |
 | H | Teams, difficulty, anti-stall modes, ranked rules | §23 |
 
-Tier A is complete (25 Sept 2026, `4a3d2848`); §25 lists what changed and what remains inert.
+Tier A is complete (25 Sept 2026, `4a3d2848`); §25 lists what changed and what remains inert. Tier B-lite is implemented (25 Sept 2026): gold `7b4e6d01`, structures `61a71536`, build actions, placement, obs and log `e27e24f3`; see the project reference §1 and §4.
 
 **PR #1 stopping point (decided 24 Sept 2026): Tier A + "Tier B-lite".** The full-game scope stands as the long-run plan, but PR #1 stops at the smallest build that contains the game's actual decision loop: spend troops on land, spend gold on troop capacity (City), or spend gold to hold a border cheaply (Defense Post). Without gold and structures the agent has one decision (which neighbour to hit), which is why the current build plays like territorial.io rather than OpenFront.
 

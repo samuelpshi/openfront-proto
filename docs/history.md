@@ -1035,3 +1035,27 @@ Verification:
 - **x86.** Batched with commit 2: one bundle will cover both.
 - **Warnings.** clang-22 `-Wconversion` gives the same warning set as `7b4e6d01` (23). A new unused-function warning for `build_structure` in the non-DEBUG builds lasts until commit 2.
 
+## 25 Sept 2026 — B-lite step 2b: build actions, placement, obs, log (`e27e24f3`)
+
+**Actions.** Discrete-13. `apply_action` runs once per decision (before the `action_repeat` loop), so a build is issued exactly once. Issue only records `pend_type` (0 none, else type + 1) and, for a post, the target's **player id**. `builds_resolve` runs at the end of the next tick, right after `structures_end_tick`, which gives upstream's timing: City at *t+22*, Post at *t+52*. `build_structure`'s checks stay authoritative.
+
+**Placement** is integer-only, with `can_place` shared by `build_structure` and both rankers.
+- The first cut sourced the depth BFS from the whole border set. That set counts water neighbours, so a coast looked like a front. The sources were changed to own tiles with an on-map land neighbour not owned by the player. Unreached tiles get the maximum depth, which covers the zero-sources case with no special code.
+- A post needs depth ≥ 2 and must cover one of our front tiles at d² ≤ 36. It's ranked by an int64 key to the centroid of the own tiles bordering the target (distinct tiles).
+- Scratch is three 16-bit `OF_N` arrays in `Env`. `sizeof(Env)` is 1044816 (+14008).
+
+**Obs** 31 → 39. **Log** gained `cities_built`, `posts_built` and `build_noops` (seat 0). K ≥ neighbour count is counted at issue.
+
+**Tests.** The of_dbg sha moved only because of the `sizeof` line. That's unavoidable when `Env` grows, so the criterion became "identical except `sizeof` and test lines" (§4 validation protocol). `build_test` a–k plus f2 and two h geometry cases. It drives the binding, so it and `run_tests` moved to the end of the header.
+
+**Obs-flag fix** (`dd675aea` → `e27e24f3`, amended before push). The per-slot post flag first measured q's post against *our* front tiles. Combat measures against the attacked tile, which is q's. So `defended_by_post` became `post_covers(e, owner, t)`, now shared by combat and the flag, and the flag scans G (q's tiles adjacent to ours). The same change exposed that the placement `<` vs `≤` boundary had only been tested through the old flag; test f2 now pins it.
+
+**Verification.**
+- Mutations: 18 planted, 18 caught. They covered resolution order, the ≤ 36 boundaries in both placement and `post_covers`, depth ≥ 1, slot stored instead of player id, pending not cleared at resolve and on reset, both index tie-breaks, water as a source, the issue-time noop count, unfinished posts counting, rankers skipping `can_place` or coverage, the key's y term, the post cost ratio, the own-side flag, and combat ignoring posts.
+- hist stdout differs from `61a71536` only in `sizeof` and the `builds ok` line; every `ep` line is identical.
+- clang-18 and clang-22 `-Wconversion` sets are unchanged (42, 23 in the header).
+- **x86:** Linux x86_64 clang-18.1.3 at `-O0`, `-O2` and ASan/UBSan, all `cmp`-identical to the Mac output; the warning set is identical.
+- Benches are relative only (`BTLEServer`): +0.2% vs `61a71536`.
+
+**Drive** changed in all three configs. A diagnostic split of `./drive 8 1 10` (§5.2 watch-list) shows action dilution explains most of the new all-timeout behaviour under a random policy, but posts alone also reach the cap.
+

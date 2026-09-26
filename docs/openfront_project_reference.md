@@ -4,7 +4,7 @@ Companion to `openfront_env_spec.md`. The spec is the **mechanics** reference: f
 
 This file records **current state only**. Session narratives, superseded baselines and closed investigations live in `docs/history.md`, which is not loaded into chats. When something changes, edit it in place and append the story to history. Don't leave SUPERSEDED banners here.
 
-Last updated: **25 Sept 2026 — B-lite step 2a, structures** (`61a71536`).
+Last updated: **25 Sept 2026 — Tier B-lite code complete** (`e27e24f3`).
 
 ---
 
@@ -12,7 +12,7 @@ Last updated: **25 Sept 2026 — B-lite step 2a, structures** (`61a71536`).
 
 The env lives in `ocean/openfront/openfront.h` and `config/openfront.ini` on `samuelpshi/PufferLib`, branch `5.0`. It trains end to end on a Vast 3090. The header conforms to upstream `7defd24` for the Tier A scope, the territorial core (spec §25). **Nothing has been trained on the Tier A build yet.** The policy baseline is 2×512. The last training result (21 Sept, pre-Tier-A) put the ceiling at observation, not terrain and not capacity (§6).
 
-**Next:** the Tier B-lite decisions (§5.2), then B-lite itself, then a baseline retrain (100M, two seeds), then the draft PR. PR #1 is Tier A plus gold, City and Defense Post (spec §0).
+**Tier B-lite is code complete** at `e27e24f3`: gold, City and Defense Post, build actions (Discrete-13), automatic placement, 39-field obs and build logging. **Next:** push, then a baseline retrain (100M, two seeds; watch-list in §5.2), then the draft PR. PR #1 is Tier A plus B-lite (spec §0).
 
 **Tier A commits on `5.0`, oldest first.** These follow the clamp `eea12848` and the 2a commit `39db150f`.
 
@@ -28,25 +28,26 @@ The env lives in `ocean/openfront/openfront.h` and `config/openfront.ini` on `sa
 | `fa64934c` | perf: LTB lookup table |
 | `3e26237d` | perf: troop-cap pow table |
 | `7b4e6d01` | B-lite 1: gold (income, `conquerPlayer` transfer, death zeroing) |
-| `61a71536` | B-lite 2a: structures (City, DefensePost). Nothing issues builds yet |
+| `61a71536` | B-lite 2a: structures (City, DefensePost): cost, capture, City bonus, post modifier, bot scrapping |
+| `e27e24f3` | B-lite 2b: build actions (Discrete-13), automatic placement, obs 39, build log |
 
 **History was rewritten once.** `5.0` was `filter-branch`ed to fix the author email. Two hashes changed: `1f3eae15` → `eea12848` and `9f303628` → `39db150f`; `297cad49` kept its hash. The trees are identical. Use the new hashes everywhere.
 
 **Dev repo:** `samuelpshi/openfront-proto`, with `docs/` and `CLAUDE.md` tracked.
 
-**Baseline: the acceptance target for any behaviour-neutral change.** It comes from `hist_run(300, 2000, 42)` at `61a71536`, and stdout includes the per-episode `ep … env … map …` lines. With the `env` hashes, the `sizeof(Env)` line and the `gold ok` / `structures ok` test lines stripped, stdout is `cmp`-identical to `3e26237d`'s: the sim trajectory hasn't changed since the perf pass. `7b4e6d01` (gold) passed the Linux x86 check. The x86 check for `61a71536` is batched with commit 2: one bundle will cover both.
+**Baseline: the acceptance target for any behaviour-neutral change.** It comes from `hist_run(300, 2000, 42)` at `e27e24f3`, and stdout includes the per-episode `ep … env … map …` lines. The sim trajectory hasn't changed since the perf pass: across `7b4e6d01`, `61a71536` and `e27e24f3` every episode's length and map hash is identical to `3e26237d`'s (see the protocol in §4 for how B-lite was checked). **x86:** Linux x86_64 clang-18.1.3 at `-O0`, `-O2` and ASan/UBSan, all `cmp`-identical to the Mac stdout; the clang-18 warning set is identical (42, 23 in the header).
 
 ```
 wins 54 (18.0%), mean length 1920, eliminated 64.2%
 annexations 3857 (12.86/ep), tiles moved 29773 (7.7/event)
 spawn failures 0, heap peak 209/2048, heap drops 0
-sizeof(Env) = 1030808
-of_dbg stdout sha256 60dc1afb304f464569125e475de45d336ead243d9e5610f20d98bfe1528c10ee
+sizeof(Env) = 1044816
+of_dbg stdout sha256 043b39322ea75e9ce2fd45982e9c30d78c6472bc5bfc469860992c6c02ccccb7
 ```
 
 Single-seed wins swing by ±9 with nothing changed (seed sd ≈ 9 over 20 seeds). Read behaviour changes off `sweep.sh`, never off this block. Don't compare win rates across the terrain change: the 0.8 land-share bar fell from ~1693 tiles to ~1198.
 
-**Throughput:** ~830k ticks/sec (`of_fast bench`, M3 Pro, `-O2`, median of 5, interleaved A/B) after the perf pass; ~724–750k before it. Bench-bisect attributed the Tier A loss to DetMath (−8.7%, `61514968`) and 1b (−9.9%, `c4faca4a`). The two table commits recovered 1b fully (+12.3% vs −9.9%) and DetMath partly (~+3% vs −8.7%; the growth `det_pow` remains). An earlier ~525k figure was not reproduced: reruns of the same commit gave ~724–750k. Likely measured under load. The 1.02M `phase1-baseline` predates map gen (different workload) and is not comparable.
+**Throughput:** ~830k ticks/sec (`of_fast bench`, M3 Pro, `-O2`, median of 5, interleaved A/B) after the perf pass; ~724–750k before it. Bench-bisect attributed the Tier A loss to DetMath (−8.7%, `61514968`) and 1b (−9.9%, `c4faca4a`). The two table commits recovered 1b fully (+12.3% vs −9.9%) and DetMath partly (~+3% vs −8.7%; the growth `det_pow` remains). An earlier ~525k figure was not reproduced: reruns of the same commit gave ~724–750k. Likely measured under load. The 1.02M `phase1-baseline` predates map gen (different workload) and is not comparable. **B-lite benches (25 Sept) are relative only:** `BTLEServer` pinned a core, and `3e26237d` itself read 616k against the recorded ~830k. Structures (`61a71536`) −2.9% vs `3e26237d`, inside the ±3% noise band; commit 2 (`e27e24f3`) +0.2% vs `61a71536`. Re-bench on a quiet machine before quoting an absolute.
 
 **Map:** procedural simplex, 48×48, land pinned at exactly **1498** tiles (`2304 − (int)(0.35 × 2304)`). The terrain split over 200 maps is Plains 61.4 / Highland 32.1 / Mountain 6.5, with 1.2 land components and 5.2 lakes on average. Islands and lakes are kept, and spawns are restricted to the largest land component. A 1000-seed × 8-player spawn sweep gave 0 hard failures; 6.9% of maps relax min-distance once, with max depth 1.
 
@@ -76,7 +77,7 @@ Single-seed wins swing by ±9 with nothing changed (seed sd ≈ 9 over 20 seeds)
 - **Warnings are stricter than upstream.** The code is clean under `-Wall -Wextra` in both modes. Upstream's `build.sh` uses `-Wall` plus a few `-Werror=` promotions and no `-Wextra`. Keep the stricter bar.
 - **`sweep.sh <dirA> <dirB>` is the acceptance test for behaviour-changing commits.** It builds each header dir at `-O2` and runs `hist <seed>` for seeds 42–61 (300 episodes each). It prints mean A, mean B, Δ, SE and t for wins, annexations and tiles moved. Build the "before" dir with `git show HEAD:ocean/openfront/{openfront,simplex}.h`. Running a dir against itself is a free null control.
 - **`harness.c` modes.** `hist <seed>` runs one seed. Under DEBUG, `hist_run` prints `ep / len / env_hash / map_hash` per episode, which bisects divergences to an episode. `fronts <seed>` runs the same 300 episodes and every 100 ticks measures each alive player's fronts (length, centroid spread, tile count); read-only, and its `ep` lines are `cmp`-equal to `hist`'s. It asserts its neighbour counts match `sorted_neighbors`.
-- **The x86 check runs through `bundle_x86.sh` and Claude.** The bundle ships no raylib, so Claude links an 8-symbol trapping stub (`InitWindow`, `DrawRectangle`, …) that `hist_run` never calls. `-Wconversion` is checked on clang-18, because Apple clang 15 reports 6 warnings where clang-18 reports 36. Compare warning sets keyed on message plus source text, so line shifts don't matter.
+- **The x86 check runs through `bundle_x86.sh` and Claude.** The bundle ships no raylib, so Claude links an 8-symbol trapping stub (`InitWindow`, `DrawRectangle`, …) that `hist_run` never calls. `-Wconversion` is checked on clang-18, because Apple clang is far quieter. `bundle_x86.sh` generates the list itself (`clang18_warnings.txt`, from the bundled committed files; needs `brew install llvm@18`): 42 at `e27e24f3`, 23 in the header. Compare warning sets keyed on message plus source text, so line shifts don't matter.
 - **Hash stdout, never the binary.** ld64 randomises LC_UUID on every link.
 - **Bench hygiene.** Build every binary first, then bench with nothing else running: no builds, no other sessions, and check `ps -Ao pcpu,comm -r` for background daemons pinning a core (`BTLEServer` held one at 100% during the perf pass). Interleave A/B runs and report the median of 5.
 - **`./drive` must run clean after any binding change.** Its output lines are recorded in §3; compare against them.
@@ -109,29 +110,30 @@ Single-seed wins swing by ±9 with nothing changed (seed sd ≈ 9 over 20 seeds)
 - **The spawn-scaled thresholds** are `WIPE_TILES` and `ANNEX_TILES`, both `SPAWN_TILES/3 = 17`.
 - **The framework callocs `Env` and calls `puf_init`, never `sim_init`.** Anything filled once at init (the `lt_sig` and `cap_pow` tables) goes in `tables_init(e)`, which both call. `drive_test` asserts the tables on the `puf_init` path.
 
-**Debug infrastructure.** Everything below sits behind `DEBUG`. `check_borders()` asserts the border invariant, phantom tiles, `alive` consistency, and that troops are non-negative and non-NaN. The test suite is `ts_test`, `conquer_test`, `blob_test`, `hole_test`, `heap_test`, `attack_test`, `isolation_test`, `annex_shore_test`, `annex_hole_test`, `gold_test`, `structure_test` and the `attack_logic` golden-vector test. The golden vectors are 5 cases computed with libm at relative tolerance 1e-9; case 4 uses a 300k-tile defender so the territory bonus actually bites. Unit tests use a local seeded xorshift, never `rand()`. When a new invariant turns up, extend `check_borders()` first; it's cheaper than the bug.
+**Debug infrastructure.** Everything below sits behind `DEBUG`. `check_borders()` asserts the border invariant, phantom tiles, `alive` consistency, and that troops are non-negative and non-NaN. The test suite is `ts_test`, `conquer_test`, `blob_test`, `hole_test`, `heap_test`, `attack_test`, `isolation_test`, `annex_shore_test`, `annex_hole_test`, `gold_test`, `structure_test`, `build_test` and the `attack_logic` golden-vector test. `build_test` drives `apply_action` / `puf_step`, so it and `run_tests` sit at the end of the header, after the binding (no forward declarations). The golden vectors are 5 cases computed with libm at relative tolerance 1e-9; case 4 uses a 300k-tile defender so the territory bonus actually bites. Unit tests use a local seeded xorshift, never `rand()`. When a new invariant turns up, extend `check_borders()` first; it's cheaper than the bug.
 
-**Binding.** The binding implements `puf_init/reset/step/log/render/close`, `compute_observations`, `sorted_neighbors`, `apply_action` and `add_log`. `OBS_SIZE 31` and `ACT_SIZES {7}`. The config keys are `num_agents`, `agent_is_bot`, `map_seed` (0 maps to 123456789) and `land_frac`.
+**Binding.** The binding implements `puf_init/reset/step/log/render/close`, `compute_observations`, `sorted_neighbors`, `apply_action` and `add_log`. `ACT_SIZES {13}` (§4). `OBS_SIZE 39`: 6 self, then 5 neighbour slots × 5, then 3 self (`gold / next_city_cost`, `gold / next_post_cost`, both clipped to [0,1], and `min(cities, 4) / 4`), then 5 per-slot post flags. A build action only records a pending build on the player: `pend_type` is 0 for none, else structure type + 1 (so a calloc'd or reset `Env` has nothing pending), and `pend_target` holds the post's target player id. `post_covers(e, owner, t)` (does `owner` have a completed post with d² ≤ 36 of tile `t`) is the single check behind both the combat `has_post` argument and the obs post flag. The config keys are `num_agents`, `agent_is_bot`, `map_seed` (0 maps to 123456789) and `land_frac`.
 
-`Log` records `perf`, `win` (land share > 0.8 at log time), `annexations` (the agent seat's own, via `annex_by[p]`), then `won / eliminated / rival_won / timeout`, then `n`. The framework divides each field by `n`, so the four outcome fields are fractions that sum to 1.0, which makes a free dashboard invariant. `won` (`winner == p` from `win_check`, which runs on `ticks % 10`) is not redundant with `win`; when they disagree, that's itself diagnostic. The outcome branch order is died → `winner == p` → `winner != 0` → cap, so elimination wins over `rival_won`.
+`Log` records `perf`, `win` (land share > 0.8 at log time), `annexations` (the agent seat's own, via `annex_by[p]`), then `won / eliminated / rival_won / timeout`, then `cities_built / posts_built / build_noops`, then `n`. Like every field, the build counts are seat 0's only (the `add_log` convention); `build_noops` counts builds that did nothing, both at resolution and at issue. The framework divides each field by `n`, so the four outcome fields are fractions that sum to 1.0, which makes a free dashboard invariant. `won` (`winner == p` from `win_check`, which runs on `ticks % 10`) is not redundant with `win`; when they disagree, that's itself diagnostic. The outcome branch order is died → `winner == p` → `winner != 0` → cap, so elimination wins over `rival_won`.
 
 **`drive_test.c` stands in for `pufferl.cu`.** It is the only thing that executes the binding path. It sets `rng = <env index>` before `puf_init`, as the framework does, and passes `land_frac = 0.65` and `map_seed = 0` from `config/openfront.ini`. It failed on the missing key from `e26522b7` (map gen, which made `puf_init` read both) until `80e82c6`. After `puf_init` it asserts `lt_sig` and `cap_pow` exactly at n = 0, 1, `OF_N/2`, `OF_N`; n = 1 is the first entry a calloc'd table gets wrong. It then drives random actions and asserts no NaNs, observations in [0,1] and episodes that terminate. When a binding invariant turns up, extend it first.
 
 Usage is `./drive [num_agents] [agent_is_bot] [episodes]`, default `1 0 30`, one config per invocation over 4 envs. Loop over configs in bash, not zsh: zsh passes an unquoted `$a = "1 1"` as a single argument, and `atoi` silently reads only the first number.
 
-Baseline at `3e26237d`. All three configs are byte-identical to `4a3d2848` (built with the two keys added).
+Baseline at `e27e24f3`. All three configs changed at this commit: actions are drawn from 13 instead of 7, the obs are 39 fields, and a builds line was added. With actions restricted to 0..6 the new header reproduces the `3e26237d` baseline exactly.
 
 `./drive` (1 agent, human seat):
 
 ```
 num_agents=1 agent_is_bot=0
-  episodes 120 over 4 envs, 959 puf_steps
-  mean episode length 31.6 decisions (max_steps 200)
-  reward range [-0.0527, 1.2003]
+  episodes 120 over 4 envs, 1336 puf_steps
+  mean episode length 44.3 decisions (max_steps 200)
+  reward range [-1.0347, 1.2356]
   obs range    [0.0000, 1.0000]
   terminals fired 120
-  action histogram: 556 544 570 532 566 560 508
-  env0 log: n=30 perf=0.8200 ep_return=1.7852 ep_len=31.3 win=30 annex=2.0
+  action histogram: 413 413 390 423 411 411 442 395 423 412 426 397 388
+  env0 log: n=30 perf=0.8542 ep_return=1.8195 ep_len=44.5 win=30 annex=1.8
+  env0 builds/ep: cities=0.90 posts=4.27 noops=15.17
 drive ok
 ```
 
@@ -139,13 +141,14 @@ drive ok
 
 ```
 num_agents=1 agent_is_bot=1
-  episodes 120 over 4 envs, 5740 puf_steps
-  mean episode length 188.7 decisions (max_steps 200)
-  reward range [-1.1335, 0.0774]
+  episodes 120 over 4 envs, 5880 puf_steps
+  mean episode length 192.6 decisions (max_steps 200)
+  reward range [-1.1148, 0.0768]
   obs range    [0.0000, 1.0000]
-  terminals fired 122
-  action histogram: 3285 3271 3272 3253 3300 3298 3281
-  env0 log: n=30 perf=0.0000 ep_return=-1.0347 ep_len=55.6 win=0 annex=0.8
+  terminals fired 121
+  action histogram: 1797 1764 1728 1831 1842 1739 1855 1878 1813 1871 1728 1811 1863
+  env0 log: n=30 perf=0.0761 ep_return=-0.7920 ep_len=75.2 win=0 annex=1.2
+  env0 builds/ep: cities=0.60 posts=2.93 noops=31.80
 drive ok
 ```
 
@@ -153,13 +156,14 @@ drive ok
 
 ```
 num_agents=8 agent_is_bot=1
-  episodes 40 over 4 envs, 1925 puf_steps
-  mean episode length 186.2 decisions (max_steps 200)
-  reward range [-1.1075, 1.1155]
+  episodes 40 over 4 envs, 2000 puf_steps
+  mean episode length 200.0 decisions (max_steps 200)
+  reward range [-1.0721, 0.0908]
   obs range    [0.0000, 1.0000]
-  terminals fired 327
-  action histogram: 8885 8634 8684 8820 8805 8903 8869
-  env0 log: n=12 perf=0.1795 ep_return=-0.2719 ep_len=89.9 win=2 annex=1.8
+  terminals fired 320
+  action histogram: 4921 4850 4836 4939 5034 4926 4954 5045 4902 4946 4839 4834 4974
+  env0 log: n=10 perf=0.0895 ep_return=-0.2453 ep_len=164.7 win=0 annex=2.2
+  env0 builds/ep: cities=1.00 posts=5.30 noops=72.50
 drive ok
 ```
 
@@ -173,12 +177,18 @@ drive ok
 
 Don't reopen any of these without new evidence.
 
-- **Action space: Discrete-7** `{noop, attack TN, nb0..nb4}`, where `nbK` indexes the agent's bordering players sorted descending by shared border length. Action repeat is 10. There's no commitment head: repeating an attack supplies commitment through combination (spec §7), which makes combination a prerequisite rather than a fidelity nicety. Absolute player IDs were rejected, because they're arbitrary labels and the sorted list is permutation-invariant. The cap of 5 came from bot play, where 95.4% of late-game samples had 5 or fewer neighbours. Retreat stays out. B-lite extends this to Discrete-13: {noop, attack TN, nb0..nb4, build_city, post_nb0..post_nb4}. City auto-placed on the deepest interior tile (multi-source BFS from own border, tie-break lowest tile index). post_nbK places a post on the own tile at border-depth >= 2 nearest the centroid of the shared front with nbK, subject to min-dist. Env-side auto-targeting of posts was rejected: posts take 50 ticks, so a reactive heuristic completes after the attack lands, and choosing the front is the decision we want learned. Unaffordable or unplaceable builds are noop (no masking).
+- **Action space: Discrete-7** `{noop, attack TN, nb0..nb4}`, where `nbK` indexes the agent's bordering players sorted descending by shared border length. Action repeat is 10. There's no commitment head: repeating an attack supplies commitment through combination (spec §7), which makes combination a prerequisite rather than a fidelity nicety. Absolute player IDs were rejected, because they're arbitrary labels and the sorted list is permutation-invariant. The cap of 5 came from bot play, where 95.4% of late-game samples had 5 or fewer neighbours. Retreat stays out. B-lite extends this to **Discrete-13**: {noop, attack TN, nb0..nb4, build_city, post_nb0..post_nb4}. A build is recorded at issue (tick *t*) and resolved at the end of *t+1*, as upstream (spec §15.4): a City completes on *t+22*, a Post on *t+52*. Placement is automatic and integer-only.
+  - **Depth** is a multi-source BFS over the player's own tiles, 4-connected. Sources are own tiles with an on-map 4-neighbour that is land not owned by the player (another player or terra nullius). Water and the map edge are not sources. Tiles no source reaches get the maximum depth, so with no sources every tile ties and the index tie-break decides.
+  - **City:** the deepest placeable tile, lowest tile index on ties.
+  - **post_nbK:** among own tiles at depth ≥ 2, the placeable one nearest the centroid of the own tiles bordering nbK (distinct tiles) (an int64 key), lowest index on ties. It must cover at least one own front tile (d² ≤ 36), else noop.
+  - A tile blocked by min-dist falls back down the ranking.
+  - post_nbK stores the neighbour's **player id** at issue, so a slot reshuffle before resolution can't retarget it. K ≥ neighbour count is a noop, counted in `build_noops`.
+  - Env-side auto-targeting of posts was rejected: posts take 50 ticks, so a reactive heuristic completes after the attack lands, and choosing the front is the decision we want learned. Unaffordable or unplaceable builds are noop (no masking).
 - **`apply_action` sends `troops/5` whatever `is_bot` says.** This is a deliberate divergence: upstream's Bot `attackAmount` is `/20`, but commitment size is action semantics, not economics. The five `is_bot` handicaps are `maxTroops/3`, growth ×0.5, TN loss `mag/10` vs `mag/5`, ×0.7 when a human attacks a bot, and gold income base 50 vs 100 (B-lite). That list of five is exhaustive for economics.
 - **`agent_is_bot` defaults to 1**, and it's a config key. At 0, a random policy wins 23 of 25 episodes against handicapped bots (pre-terrain), so the game is solved, not learnable.
 - **Agent seats:** `Agent agents[MAXP-1]` with `num_agents` from config (default 1; 8 is self-play). Seats `1..num_agents` act, and the rest run `bot_tick`. Memory is `(total_agents / num_agents) × sizeof(Env)`.
 - **Death is terminal-and-idle, not respawn.** A dead seat gets `terminals = 1` once, then zeroed obs.
-- **Observations: flat, `OBS_SIZE 31`.** There are 6 self features and 5 neighbour slots × 5 features, and every field is a ratio, so obs survive rescales. The known ceiling is geometry, which flat obs can't show. Don't reward annexation to compensate.
+- **Observations: flat, `OBS_SIZE 39`** (31 before B-lite). There are 6 self features, 5 neighbour slots × 5 features, 3 B-lite self features (gold against the next City and Post cost, city count) and 5 per-slot post flags. Every field is a ratio, so obs survive rescales. A slot's post flag is measured on **q's side** of the front (q's tiles 4-adjacent to ours) via `post_covers`, exactly as combat measures a post. The known ceiling is geometry, which flat obs can't show. Don't reward annexation to compensate.
 - **Reward:** the land-share delta per decision, `(tiles_now − tiles_prev) / land_tiles`, plus +1 for a win and −1 for death. The measured range is about [−1.23, +1.24].
 - **Start troops are upstream's:** 25000 human, 10000 bot. The `+50000` `max_troops` floor stays unapplied. Start troops, the floor and the City troop bonus (B-lite) are one coupled group, so any rescale moves all three in one commit.
 - **Policy: 2×512.** It gained +0.02 perf over 1×128 at no throughput cost. Revisit only alongside an encoder change.
@@ -186,7 +196,7 @@ Don't reopen any of these without new evidence.
 - **Terrain invariant: owned ⇒ land.** It's enforced at the only unowned-tile entry points (attack seed and refill, and the spawn disk). Any new tile-taking path must filter for land at entry. Never compare `terrain[t]` directly; use the accessors.
 - **`HEAPCAP 2048`.** This is behaviour- and performance-identical to `8*N`. Revisit only if `heap_full_drops` goes nonzero.
 - **Cross-platform determinism.** DetMath is ported in double (`det_exp/log/pow/pow2/atan2`), and no libm transcendentals remain in the header. `#pragma STDC FP_CONTRACT OFF` sits on the header's first line, with `DEFAULT` restored on the last, and it's load-bearing since 2a: stripping it under `-ffp-contract=fast` diverges the output. This relies on clang, which `build.sh` uses. It's deliberately not a `build.sh` flag.
-- **Validation protocol.** A behaviour-changing commit needs `sweep.sh` over 20 seeds, unpaired, deciding on |Δ| < 2 SE. The runs are unpaired because trajectories diverge at episode 0. A real effect gets attributed by ablation before committing. A behaviour-neutral change needs an unchanged sha, nothing less. Five seeds underestimate sd and produced one false positive.
+- **Validation protocol.** A behaviour-changing commit needs `sweep.sh` over 20 seeds, unpaired, deciding on |Δ| < 2 SE. The runs are unpaired because trajectories diverge at episode 0. A real effect gets attributed by ablation before committing. A behaviour-neutral change needs an unchanged sha, nothing less. When a commit necessarily grows `Env`, behaviour-neutral means stdout identical except the `sizeof` line and added test lines, with every `ep` line identical; if the commit also extends `env_hash` to cover new state, the `env` field may change but every length and map hash must match. Used for `7b4e6d01` and `61a71536` (both extended `env_hash`) and `e27e24f3` (every `ep` line identical). Five seeds underestimate sd and produced one false positive.
 - **x86 check trigger:** run it for any commit touching FP, libm/DetMath, type widths or format strings, and always before a training run or an upstream push. Otherwise batch it.
 - **Scope:** the full game, staged by tier (spec §0). **PR #1 is Tier A plus Tier B-lite**, meaning gold income, the `conquerPlayer` gold transfer, City and Defense Post, and bot structure scrapping. Upgrades out of PR #1 (a second City is the same decision as an upgrade: same cost counter, same bonus). Without gold and structures, the agent has one decision. Factories are deferred: they're all of Tier F, and degenerate at 48×48 because station range 110 exceeds the map. Nukes are the likely second PR. Spatial obs, a conv encoder and a tile-targeted head are the first follow-up after PR #1, judged by elimination rate.
 - **Tier A trims:** spawn phase is equivalent by construction; spawn immunity goes to Phase 3 (inert at `agent_is_bot = 1`); river-crossing `nearby()` goes to Tier C; fallout exclusion goes to Tier D.
@@ -226,13 +236,9 @@ Every applied rescale gets a row here.
 
 Perf pass done (`fa64934c`, `3e26237d`). Remaining headroom: the growth `det_pow(troops, 0.73)`, once per player per tick, which can't be tabled.
 
-### 5.2 Tier B-lite decisions (answer before any code)
+### 5.2 Tier B-lite (code complete at `e27e24f3`)
 
-1. **Economy vs episode length.** Answered 25 Sept, see §4 / rescale table.
-2. **Defense Post radius.** Answered 25 Sept: 6, see rescale table.
-3. **Structure min-distance.** Answered 25 Sept: 3, see rescale table.
-4. **Action space.** Answered 25 Sept, see §4 / rescale table.
-5. **Upgrades.** Answered 25 Sept, see §4 / rescale table.
+All five decisions were answered 25 Sept (§4 and the rescale table). The code is in `7b4e6d01` (gold), `61a71536` (structures) and `e27e24f3` (build actions, placement, obs, log).
 
 **`fronts` measurement (25 Sept, harness at `3e26237d` header).** `./of_dbg fronts <seed>`, 300 episodes × 2000 ticks, sampled every 100 ticks over alive players. `len_e` is `sorted_neighbors`' shared count, which counts (own tile, neighbour tile) adjacent pairs, so a tile touching two of q's tiles counts twice; `len_t` counts distinct own tiles. The neighbour sets are identical. The longest front is `sorted_neighbors`' slot 0. Centroid and `ext` (max Euclidean distance from the centroid to a front tile) are over distinct tiles. Nearest-rank percentiles, p25 / p50 / p75 / p90:
 
@@ -249,21 +255,30 @@ Perf pass done (`fa64934c`, `3e26237d`). Remaining headroom: the growth `det_pow
 
 Samples: seed 42 has 29483 player-samples, 90676 fronts, 931 beyond slot 5; seed 43 has 29767, 91804 and 894. Every alive sample had at least one front. These numbers set range 6 and min-dist 3 (rescale table).
 
-**Implementation notes for B-lite.** Wire `conquerPlayer`'s gold transfer at **both** call sites: the dead-defender wipe and `annex_remove` on a whole-territory take. Bot structure scrapping becomes live. `attack_logic` already has the `has_post` hook (`mag ×5`, `tileCost ×3`). Posts don't shoot at this anchor.
+**Implementation notes.** `conquerPlayer`'s gold transfer runs at both call sites: the dead-defender wipe and `annex_remove` on a whole-territory take. Posts don't shoot at this anchor. The two distance tests differ, as upstream: post range is inclusive, d² ≤ 6² (`post_covers`), and min-dist is strict, d² < 3² (`can_place`). **Bots use `expandRatio`, not `reserve`, against a Bot that owns structures** (spec §14.2); this applies to the agent at `agent_is_bot = 1`. It's expected, not a bug.
 
-- **Distance comparisons.** Nothing is wired yet: `has_post` is an `int` argument to `attack_logic`, and the one sim caller passes a literal `0`. When it is wired, the post range is **inclusive**, Euclidean `d² <= 6²` (spec §2.4 `nearbyUnits`, §17.1). Structure min-dist is **strict**, `d² < 3²` (spec §15.5), so it blocks d ≤ 2.83. The two comparisons differ upstream; keep them different.
+**Retrain watch-list.**
 
-- **Obs** gains `gold / next_city_cost` and `gold / next_post_cost` (both clipped to [0,1]), own city count, and a per-neighbour-slot flag: "neighbour has a completed post within range of the shared front".
-- **Log** gains `cities_built` and `posts_built`.
-- **Bots use `expandRatio`, not `reserve`, against a Bot that owns structures** (spec §14.2). This applies to the agent at `agent_is_bot = 1`. It's expected, not a bug.
-- **Commit 2 (placement + actions) must match upstream timing.** A build issued on tick *t* starts on *t+1* upstream (spec §15.4). So `apply_action` records a pending build, and it resolves in the end-of-tick pass of the next tick, calling `build_structure` **after** `structures_end_tick`. The countdown is `build_left = D + 1`, which assumes exactly that call point. Validation and the gold deduction happen at resolution, not at issue.
+- `cities_built` / `posts_built`: whether the policy spams posts or invests in Cities.
+- The `build_noops` trend.
+- Episode length and timeouts. Under a random policy, `./drive 8 1 10` now hits the 200-step cap in every episode (186.2 before). The cause is not settled. Single 40-episode random runs at `e27e24f3`, one action seed, not significance-tested:
+
+  | Actions | Mean length |
+  |---|---|
+  | 7 (old space) | 186.2, the old baseline exactly |
+  | 13, builds mapped to noop (attack 6/13 instead of 6/7) | 197.4 |
+  | 13, City builds only | 189.1 |
+  | 13, Post builds only | 200.0 |
+  | 13, all builds | 200.0 |
+
+  Action dilution accounts for most of the shift, but posts alone reach the cap, so post strength is not ruled out.
 
 ### 5.3 Side items
 
 **Open code checks:**
 
-- **`float lf = dict_get(...)` in `puf_init`.** This is the only double→float narrowing on clang-18. `land_frac` feeds map gen through `puf_init`, which the harness never exercises, so a fix could change the training maps without moving the harness sha. It needs its own check.
-- **Make `bundle_x86.sh` generate the raylib stub itself.**
+- **`float lf = dict_get(...)` in `puf_init`** (`openfront.h:3526` at `e27e24f3`, confirmed under clang-18). This is the only double→float narrowing on clang-18. `land_frac` feeds map gen through `puf_init`, which the harness never exercises, so a fix could change the training maps without moving the harness sha. It needs its own check.
+- **`bundle_x86.sh` generates the warning list; the raylib stub is still missing.** It needs `Color`, `KEY_ESCAPE` and 8 functions: `InitWindow`, `IsWindowReady`, `SetTargetFPS`, `IsKeyDown`, `BeginDrawing`, `EndDrawing`, `ClearBackground`, `DrawRectangle`.
 
 **Upstream PRs:**
 
