@@ -48,7 +48,7 @@ of_dbg stdout sha256 043b39322ea75e9ce2fd45982e9c30d78c6472bc5bfc469860992c6c02c
 
 Single-seed wins swing by ±9 with nothing changed (seed sd ≈ 9 over 20 seeds). Read behaviour changes off `sweep.sh`, never off this block. Don't compare win rates across the terrain change: the 0.8 land-share bar fell from ~1693 tiles to ~1198.
 
-**Throughput:** ~830k ticks/sec (`of_fast bench`, M3 Pro, `-O2`, median of 5, interleaved A/B) after the perf pass; ~724–750k before it. Bench-bisect attributed the Tier A loss to DetMath (−8.7%, `61514968`) and 1b (−9.9%, `c4faca4a`). The two table commits recovered 1b fully (+12.3% vs −9.9%) and DetMath partly (~+3% vs −8.7%; the growth `det_pow` remains). An earlier ~525k figure was not reproduced: reruns of the same commit gave ~724–750k. Likely measured under load. The 1.02M `phase1-baseline` predates map gen (different workload) and is not comparable. **B-lite benches (25 Sept) are relative only:** `BTLEServer` pinned a core, and `3e26237d` itself read 616k against the recorded ~830k. Structures (`61a71536`) −2.9% vs `3e26237d`, inside the ±3% noise band; commit 2 (`e27e24f3`) +0.2% vs `61a71536`. Re-bench on a quiet machine before quoting an absolute.
+**Throughput:** 871K ticks/sec at `70f34d75` (26 Sept, `of_fast bench`, M3 Pro, `-O2`, one core, on AC power, median of 3, interleaved A/B). The A/B against the perf pass is `3e26237d` 895,526 vs `70f34d75` 871,050 (−2.7%), which matches the 25 Sept relative −2.9%. Before the perf pass: ~724–750k. Bench-bisect attributed the Tier A loss to DetMath (−8.7%, `61514968`) and 1b (−9.9%, `c4faca4a`). The two table commits recovered 1b fully (+12.3% vs −9.9%) and DetMath partly (~+3% vs −8.7%; the growth `det_pow` remains). An earlier ~525k figure was not reproduced: reruns of the same commit gave ~724–750k. Likely measured under load. The 1.02M `phase1-baseline` predates map gen (different workload) and is not comparable. **B-lite benches (25 Sept) are relative only:** `BTLEServer` pinned a core, and `3e26237d` itself read 616k/604k. Structures (`61a71536`) −2.9% vs `3e26237d`, inside the ±3% noise band; commit 2 (`e27e24f3`) +0.2% vs `61a71536`. The earlier ~830k figure and the 616k/604k readings were taken on battery or under memory pressure. Bench only on AC power with memory free.
 
 **Map:** procedural simplex, 48×48, land pinned at exactly **1498** tiles (`2304 − (int)(0.35 × 2304)`). The terrain split over 200 maps is Plains 61.4 / Highland 32.1 / Mountain 6.5, with 1.2 land components and 5.2 lakes on average. Islands and lakes are kept, and spawns are restricted to the largest land component. A 1000-seed × 8-player spawn sweep gave 0 hard failures; 6.9% of maps relax min-distance once, with max depth 1.
 
@@ -433,13 +433,10 @@ Claim only what is built and shipped. No feature lists; mention only mechanics t
 - Output byte-identical across arm64 and x86_64, with hashed baselines gating each behavioural change.
 - O(1) incremental border maintenance, as an original design decision.
 - Implemented gold, City and Defense Post in C, with build actions and automatic placement.
+- 871K ticks/sec at `70f34d75`: `of_fast bench`, M3 Pro, `-O2`, one core, on AC power, median of 3, interleaved A/B (26 Sept).
 - Ablations (§6.1): structures raise land share from 0.34 to 0.70. Posts alone reach 0.54, and cities add value only alongside posts. Tier A mechanics alone leave perf flat. Scope to state with these numbers: 2 seeds each, 100M, 2×512, 48×48, one agent vs 7 scripted bots, perf = land share at the fixed horizon.
 
 **Pre-Tier-A context only:** the ~35% average land share at 100M (2×512: 0.354 / 0.342), against random play at 0.4%. Superseded as a headline by the ablation numbers above.
-
-**True but stale; re-measure before quoting:**
-
-- The throughput figure: ~830k ticks/sec on the current header (M3 Pro, single core); re-measure after B-lite before quoting.
 
 **Never write:**
 
@@ -457,11 +454,11 @@ Claim only what is built and shipped. No feature lists; mention only mechanics t
 
 **Not yet true:** maintainer review, an open or merged PR, "contributed". Fork commits don't reach the contribution graph; only merged upstream PRs do.
 
-**Resume draft** (24 Sept, adoption unconfirmed; bullet 2's throughput number is stale):
+**Resume draft** (26 Sept, adoption unconfirmed):
 
 ```
 OpenFront RL Environment – PufferLib | C	May 2026 – Present
-- Built a C reimplementation of the strategy game OpenFront as a PufferLib reinforcement-learning environment, simulating ~800K game ticks/sec on one core.
+- Built a C reimplementation of the strategy game OpenFront as a PufferLib reinforcement-learning environment, simulating ~850K game ticks/sec on one core.
 - Added an in-game economy and buildings (gold, cities, defense posts); ablation runs showed they double a PPO agent's territory against scripted bots (34% → 70% land share, 2 seeds).
 ```
 
