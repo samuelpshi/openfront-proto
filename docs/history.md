@@ -1059,3 +1059,23 @@ Verification:
 
 **Drive** changed in all three configs. A diagnostic split of `./drive 8 1 10` (§5.2 watch-list) shows action dilution explains most of the new all-timeout behaviour under a random policy, but posts alone also reach the cap.
 
+
+## 26 Sept 2026 — B-lite retrain, build ablations, run-reading fixes
+
+**Retrain.** Full B-lite (Discrete-13), 100M, 2×512, seeds 73 and 74: perf .702 / .699, win .809 / .806, elim .086 / .092. The policy builds about 2.9 cities and 6.4 posts per episode. The fork head moved to `70f34d75` for the render (City = white square, Post = black square, hollow while building). It's behaviour-neutral: of_dbg sha `043b3932…` is unchanged and `cxxcheck.sh` passes.
+
+**Control sequence.** Each variant was a one-line `sed` on a throwaway Vast clone of `70f34d75`, never committed (the seds are in reference §6.1). The order was: no-builds (7 actions), to separate Tier A from B-lite; builds-as-noop (13 actions), to separate the builds from the extra action ids; then posts-off and cities-off, to split the builds. Results, final dashboard values:
+- No-builds matched the pre-Tier-A 2×512 perf within noise (.338 / .333 vs .354 / .342) and shifted outcomes toward timeouts.
+- Builds-as-noop equalled no-builds (.338 / .328).
+- Posts-off (s73) was .337.
+- Cities-off was .541 / .540.
+
+Reading the header for why structures help refuted the "build to pacify bots" idea. `bot_send` (`openfront.h:1761`) uses `expand_ratio` against a Bot owning any structure, which is the smaller ratio, so bots attack structure owners with more troops. The remaining explanation (captured cities change owner, so posts make cities safe) is a code-reading hypothesis pending a render check.
+
+**Destroyed-instance rerun.** An instance was destroyed and its runs had to be redone on a new one. Two Vast templates were seen during the session, one with system NCCL and one with only the pip copy. The Vast reference now records the NCCL check, tmux windows, `tee` logging, a collection loop that skips empty checkpoint dirs, and the rule to decide on follow-up runs before destroying an instance.
+
+**drive / epoch-1 investigation.** Two readings were wrong:
+- **Epoch 1.** It had been used as the random baseline. The first dashboard row is death-biased: logs flush on a 0.6 s wall clock (`src/pufferl.cu:3137-3156`), so it only holds seat episodes that ended in the first window (~65.5K steps, ep_len ~50, perf ~0.000, elim 0.99). A window-W reproduction matched at W≈128. The gap against 65.5K = 1024×64 steps is probably `num_buffers=2`, which is inferred, not verified.
+- **`drive`'s "mean episode length".** It counts env episodes, which run on after the agent dies, so it reads ~190. That settles the 25 Sept "random policy hits the 200-step cap" item as a measurement artifact, not post strength.
+
+Unbiased random baselines were measured instead, over full episodes (~4000 over 1024 envs): 13 actions ep_len 65.9 / perf 0.0267; 7 actions 45.1 / 0.0016. Other fixes the same day: `sizeof(Env)` in reference §6.3 corrected to 1,044,816; cross-host SPS dropped from the docs (190K vs 240K+ by host).

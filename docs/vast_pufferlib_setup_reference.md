@@ -15,18 +15,26 @@
 >
 > **Open questions from the last revision, now answered:**
 > - *Is `ccache` preinstalled?* The apt block below installs it, and that block is still the right first move — 5.0's `native` build invokes `ccache` unconditionally and dies at `build.sh` line 506 without it.
-> - *How is `config/<env>.ini` loaded, and what does a malformed one look like?* It loads natively and `[env]` keys reach `puf_init`. Verify per run by checking epoch 1 against the env's random-policy baseline rather than trusting the ini — a silently-defaulted key produces a plausible-looking curve on the wrong problem. See §6.2 of `openfront_project_reference.md`.
+> - *How is `config/<env>.ini` loaded, and what does a malformed one look like?* It loads natively and `[env]` keys reach `puf_init`. Verify per run by checking epoch 1's entropy and build counters (never its perf or length, which are death-biased) rather than trusting the ini — a silently-defaulted key produces a plausible-looking curve on the wrong problem. See §6.2 of `openfront_project_reference.md`.
 > - *Does the "Mac can't eval CUDA checkpoints" limit survive?* **No — dead (21 Sept 2026).** The Mac `--cpu` build loads and renders Vast `.bin` checkpoints.
 >
 > **21 Sept 2026 — second verified instance, different template (CUDA 13.2, `/workspace`, `/venv/main` Python env).** Additions to the flow above:
 >
-> - **Add `tmux` and NCCL to the apt block.** The trainer links `-lnccl` even on one GPU. This template ships NCCL only as a pip package (`/venv/main/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2`) with no unversioned `.so`, so the link fails with `cannot find -lnccl`. Fix used: `D=<that dir>; ln -s $D/libnccl.so.2 $D/libnccl.so; export LIBRARY_PATH=$D:$LIBRARY_PATH LD_LIBRARY_PATH=$D:$LD_LIBRARY_PATH` — the export must be live in the shell (tmux pane) that runs `./puffer`. Worked at runtime; the pip package's CUDA major (cu12 vs cu13) was not checked. Cleaner alternative: `apt install -y libnccl2 libnccl-dev` (needs NVIDIA's cuda-keyring repo). RTX 3090 (sm_86) is fine on CUDA 13.
+> - **NCCL: check before fixing.** The trainer links `-lnccl` even on one GPU. Two templates have been seen. One has system NCCL (`/usr/lib/x86_64-linux-gnu/libnccl.so`), and no fix is needed. The other ships NCCL only as a pip package; find it with `find / -name "libnccl.so*"` and apply the symlink + export below only then. The pip-only template ships it (`/venv/main/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2`) with no unversioned `.so`, so the link fails with `cannot find -lnccl`. Fix used: `D=<that dir>; ln -s $D/libnccl.so.2 $D/libnccl.so; export LIBRARY_PATH=$D:$LIBRARY_PATH LD_LIBRARY_PATH=$D:$LD_LIBRARY_PATH` — exports are per-pane, so the export must be live in the pane that runs `./puffer`. Worked at runtime; the pip package's CUDA major (cu12 vs cu13) was not checked. Cleaner alternative: `apt install -y libnccl2 libnccl-dev` (needs NVIDIA's cuda-keyring repo). RTX 3090 (sm_86) is fine on CUDA 13.
 > - **Clone over HTTPS** (`https://github.com/samuelpshi/PufferLib.git`) — no SSH key needed for a train-only box.
-> - **Run under tmux** so an SSH drop doesn't kill the run.
+> - **Run under tmux** so an SSH drop doesn't kill the run. Add `tmux` to the apt block if the template lacks it. The templates seen so far auto-start tmux, and `tmux new` then errors with "sessions should be nested". Open a second window instead (`Ctrl-b c`); a new window needs the NCCL exports again.
+> - **Pipe every run through `tee run_<tag>.log`.** With stdout not a tty, the dashboard appends plain snapshots, so every run's final block survives sequential runs.
 > - **`config/openfront.ini` now has `device = cuda`**; GPU still reads 3–7% (6–26% at 2×512) because the env is 81–94% of the loop. Low GPU% is not the device bug — check the ini.
-> - **Pass run length on the CLI:** `./puffer train --train.total_timesteps=100000000`. The ini default is 10M. Seed: `--base.seed=N` (default 73). Policy shape: `--policy.hidden_size=512 --policy.num_layers=2`. 100M ≈ 5.6 min at ~295K SPS.
-> - **Collecting checkpoints:** one timestamped dir per run under `checkpoints/openfront/`, names sort chronologically, and the last `.bin` in each is the final. Copy finals to `/tmp/ck`, then from the Mac `scp -P <port> 'root@<host>:/tmp/ck/*' <dest>` — capital `-P`, port and host from the console's connect (`>_`) command, and quote the remote glob. Check sizes: 1×128 ≈ 200 KB, 2×512 ≈ 6 MB.
-> - **Mac eval works** — see `openfront_project_reference.md` §6.5.
+> - **Pass run length on the CLI:** `./puffer train --train.total_timesteps=100000000`. The ini default is 10M. Seed: `--base.seed=N` (default 73). Policy shape: `--policy.hidden_size=512 --policy.num_layers=2`. Throughput varies up to ~2× by host; see §6.3 of the project reference.
+> - **Collecting checkpoints:** one timestamped dir per run under `checkpoints/openfront/`, names sort chronologically, and the last `.bin` in each is the final. Copy finals to `/tmp/ck` with a loop that skips empty checkpoint dirs:
+>
+>   ```bash
+>   for d in checkpoints/openfront/*/; do f=$(ls "$d"*.bin 2>/dev/null | tail -1); [ -n "$f" ] && cp "$f" /tmp/ck/"$(basename "$d")".bin; done
+>   ```
+>
+>   Also copy `run_*.log` and `logs/openfront/*.ini`; each `.ini` holds the seed and the full binned curve. Map seeds with `grep -H "^seed = 7" *.ini`. Then from the Mac `scp -P <port> 'root@<host>:/tmp/ck/*' <dest>` — capital `-P`, port and host from the console's connect (`>_`) command, and quote the remote glob. Check sizes: 1×128 ≈ 200 KB, 2×512 ≈ 6 MB.
+> - **Mac eval works** — see `openfront_project_reference.md` §6.3.
+> - **Decide on follow-up runs before destroying an instance.**
 >
 > **Two things that waste instance time — don't:**
 > - `./puffer eval` opens a render window and **segfaults headless** (GLFW fails on missing `DISPLAY`, unchecked before dereference). `xvfb-run -a` initializes but prints no metrics. Eval locally.

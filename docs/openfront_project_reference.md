@@ -4,15 +4,15 @@ Companion to `openfront_env_spec.md`. The spec is the **mechanics** reference: f
 
 This file records **current state only**. Session narratives, superseded baselines and closed investigations live in `docs/history.md`, which is not loaded into chats. When something changes, edit it in place and append the story to history. Don't leave SUPERSEDED banners here.
 
-Last updated: **25 Sept 2026 — Tier B-lite code complete** (`e27e24f3`).
+Last updated: **26 Sept 2026 — B-lite retrained, build ablations done** (fork head `70f34d75`).
 
 ---
 
 ## 1. Current state
 
-The env lives in `ocean/openfront/openfront.h` and `config/openfront.ini` on `samuelpshi/PufferLib`, branch `5.0`. It trains end to end on a Vast 3090. The header conforms to upstream `7defd24` for the Tier A scope, the territorial core (spec §25). **Nothing has been trained on the Tier A build yet.** The policy baseline is 2×512. The last training result (21 Sept, pre-Tier-A) put the ceiling at observation, not terrain and not capacity (§6).
+The env lives in `ocean/openfront/openfront.h` and `config/openfront.ini` on `samuelpshi/PufferLib`, branch `5.0`. It trains end to end on a Vast 3090. The header conforms to upstream `7defd24` for the Tier A scope, the territorial core (spec §25). The policy baseline is 2×512.
 
-**Tier B-lite is code complete** at `e27e24f3`: gold, City and Defense Post, build actions (Discrete-13), automatic placement, 39-field obs and build logging. **Next:** push, then a baseline retrain (100M, two seeds; watch-list in §5.2), then the draft PR. PR #1 is Tier A plus B-lite (spec §0).
+**Tier B-lite is code complete and trained** (26 Sept): gold, City and Defense Post, build actions (Discrete-13), automatic placement, 39-field obs and build logging. At 100M the full build reaches perf 0.702 / 0.699 (seeds 73/74). A build ablation shows the gain comes from posts, with cities adding to it only when posts exist (§6.1). **Next:** a render check (do cities sit in the interior behind posted fronts?), then the pre-PR items (§5.3), then the draft PR carrying the ablation table. PR #1 is Tier A plus B-lite (spec §0).
 
 **Tier A commits on `5.0`, oldest first.** These follow the clamp `eea12848` and the 2a commit `39db150f`.
 
@@ -30,12 +30,13 @@ The env lives in `ocean/openfront/openfront.h` and `config/openfront.ini` on `sa
 | `7b4e6d01` | B-lite 1: gold (income, `conquerPlayer` transfer, death zeroing) |
 | `61a71536` | B-lite 2a: structures (City, DefensePost): cost, capture, City bonus, post modifier, bot scrapping |
 | `e27e24f3` | B-lite 2b: build actions (Discrete-13), automatic placement, obs 39, build log |
+| `70f34d75` | render: draw structures (City = white square, Post = black square, hollow while building); behaviour-neutral |
 
 **History was rewritten once.** `5.0` was `filter-branch`ed to fix the author email. Two hashes changed: `1f3eae15` → `eea12848` and `9f303628` → `39db150f`; `297cad49` kept its hash. The trees are identical. Use the new hashes everywhere.
 
 **Dev repo:** `samuelpshi/openfront-proto`, with `docs/` and `CLAUDE.md` tracked.
 
-**Baseline: the acceptance target for any behaviour-neutral change.** It comes from `hist_run(300, 2000, 42)` at `e27e24f3`, and stdout includes the per-episode `ep … env … map …` lines. The sim trajectory hasn't changed since the perf pass: across `7b4e6d01`, `61a71536` and `e27e24f3` every episode's length and map hash is identical to `3e26237d`'s (see the protocol in §4 for how B-lite was checked). **x86:** Linux x86_64 clang-18.1.3 at `-O0`, `-O2` and ASan/UBSan, all `cmp`-identical to the Mac stdout; the clang-18 warning set is identical (42, 23 in the header).
+**Baseline: the acceptance target for any behaviour-neutral change.** It comes from `hist_run(300, 2000, 42)` at `e27e24f3`, unchanged at `70f34d75` (sha verified, `cxxcheck.sh` passes). Canonical command, bare `of_dbg`: `./mk.sh; ./of_dbg > f; shasum -a 256 f`. Stdout includes the per-episode `ep … env … map …` lines. The sim trajectory hasn't changed since the perf pass: across `7b4e6d01`, `61a71536` and `e27e24f3` every episode's length and map hash is identical to `3e26237d`'s (see the protocol in §4 for how B-lite was checked). **x86:** Linux x86_64 clang-18.1.3 at `-O0`, `-O2` and ASan/UBSan, all `cmp`-identical to the Mac stdout; the clang-18 warning set is identical (42, 23 in the header).
 
 ```
 wins 54 (18.0%), mean length 1920, eliminated 64.2%
@@ -82,7 +83,7 @@ Single-seed wins swing by ±9 with nothing changed (seed sd ≈ 9 over 20 seeds)
 - **Bench hygiene.** Build every binary first, then bench with nothing else running: no builds, no other sessions, and check `ps -Ao pcpu,comm -r` for background daemons pinning a core (`BTLEServer` held one at 100% during the perf pass). Interleave A/B runs and report the median of 5.
 - **`./drive` must run clean after any binding change.** Its output lines are recorded in §3; compare against them.
 - **zsh gotchas.** Unquoted `$VAR` doesn't word-split, so compile lines built in variables go through `bash <<'EOF'` or `${=VAR}`. `setopt interactivecomments` is in `~/.zshrc`.
-- **One working tree, one session.** Keep `~/summer26/PufferLib` on `5.0`, since `mk.sh` hardcodes that path. Binpack gets its own worktree (`git worktree add ../PufferLib-binpack binpack`). `resources/constellation/experiments.ini` carries another session's uncommitted edit, so never `git add -A` in the fork.
+- **One working tree, one session.** Keep `~/summer26/PufferLib` on `5.0`, since `mk.sh` hardcodes that path. Binpack gets its own worktree (`git worktree add ../PufferLib-binpack binpack`). `resources/constellation/experiments.ini` carries another session's uncommitted edit, so never `git add -A` in the fork. Stray build outputs (`/openfront`, `/flappy`, `/minimal`, …) are listed in the fork's `.git/info/exclude`, so `git status` shows only that edit.
 
 ---
 
@@ -236,9 +237,9 @@ Every applied rescale gets a row here.
 
 Perf pass done (`fa64934c`, `3e26237d`). Remaining headroom: the growth `det_pow(troops, 0.73)`, once per player per tick, which can't be tabled.
 
-### 5.2 Tier B-lite (code complete at `e27e24f3`)
+### 5.2 Tier B-lite (trained 26 Sept)
 
-All five decisions were answered 25 Sept (§4 and the rescale table). The code is in `7b4e6d01` (gold), `61a71536` (structures) and `e27e24f3` (build actions, placement, obs, log).
+All five decisions were answered 25 Sept (§4 and the rescale table). The code is in `7b4e6d01` (gold), `61a71536` (structures) and `e27e24f3` (build actions, placement, obs, log). The retrain watch-list (build counts, `build_noops`, episode length and timeouts) is answered by the ablation table in §6.1. Findings: the policy builds both (about 2.9 cities and 6.4 posts per episode); posts alone are worth +0.20 perf; cities are worth +0.16 only when posts exist; the six extra action ids contribute nothing on their own. The random-policy "200-step cap" item turned out to be a measurement artifact in `drive`, not post strength (§6.2).
 
 **`fronts` measurement (25 Sept, harness at `3e26237d` header).** `./of_dbg fronts <seed>`, 300 episodes × 2000 ticks, sampled every 100 ticks over alive players. `len_e` is `sorted_neighbors`' shared count, which counts (own tile, neighbour tile) adjacent pairs, so a tile touching two of q's tiles counts twice; `len_t` counts distinct own tiles. The neighbour sets are identical. The longest front is `sorted_neighbors`' slot 0. Centroid and `ext` (max Euclidean distance from the centroid to a front tile) are over distinct tiles. Nearest-rank percentiles, p25 / p50 / p75 / p90:
 
@@ -255,29 +256,15 @@ All five decisions were answered 25 Sept (§4 and the rescale table). The code i
 
 Samples: seed 42 has 29483 player-samples, 90676 fronts, 931 beyond slot 5; seed 43 has 29767, 91804 and 894. Every alive sample had at least one front. These numbers set range 6 and min-dist 3 (rescale table).
 
-**Implementation notes.** `conquerPlayer`'s gold transfer runs at both call sites: the dead-defender wipe and `annex_remove` on a whole-territory take. Posts don't shoot at this anchor. The two distance tests differ, as upstream: post range is inclusive, d² ≤ 6² (`post_covers`), and min-dist is strict, d² < 3² (`can_place`). **Bots use `expandRatio`, not `reserve`, against a Bot that owns structures** (spec §14.2); this applies to the agent at `agent_is_bot = 1`. It's expected, not a bug.
+**Implementation notes.** `conquerPlayer`'s gold transfer runs at both call sites: the dead-defender wipe and `annex_remove` on a whole-territory take. Posts don't shoot at this anchor. The two distance tests differ, as upstream: post range is inclusive, d² ≤ 6² (`post_covers`), and min-dist is strict, d² < 3² (`can_place`). **Bots use `expandRatio`, not `reserve`, against a Bot that owns structures** (spec §14.2); this applies to the agent at `agent_is_bot = 1`. It's upstream behaviour, not a bug; its effect on training is in §6.1.
 
-**Retrain watch-list.**
-
-- `cities_built` / `posts_built`: whether the policy spams posts or invests in Cities.
-- The `build_noops` trend.
-- Episode length and timeouts. Under a random policy, `./drive 8 1 10` now hits the 200-step cap in every episode (186.2 before). The cause is not settled. Single 40-episode random runs at `e27e24f3`, one action seed, not significance-tested:
-
-  | Actions | Mean length |
-  |---|---|
-  | 7 (old space) | 186.2, the old baseline exactly |
-  | 13, builds mapped to noop (attack 6/13 instead of 6/7) | 197.4 |
-  | 13, City builds only | 189.1 |
-  | 13, Post builds only | 200.0 |
-  | 13, all builds | 200.0 |
-
-  Action dilution accounts for most of the shift, but posts alone reach the cap, so post strength is not ruled out.
+**Open question for Joseph, not a bug.** Posts are now the dominant lever (§6.1). Post range 6 is a rescale (§4 table). Bring the ablation table to review rather than retune it before the PR.
 
 ### 5.3 Side items
 
 **Open code checks:**
 
-- **`float lf = dict_get(...)` in `puf_init`** (`openfront.h:3526` at `e27e24f3`, confirmed under clang-18). This is the only double→float narrowing on clang-18. `land_frac` feeds map gen through `puf_init`, which the harness never exercises, so a fix could change the training maps without moving the harness sha. It needs its own check.
+- **`float lf = dict_get(...)` in `puf_init`** (`openfront.h:3537` at `70f34d75`; the render overlay shifted it; confirmed under clang-18). This is the only double→float narrowing on clang-18. `land_frac` feeds map gen through `puf_init`, which the harness never exercises, so a fix could change the training maps without moving the harness sha. It needs its own check.
 - **`bundle_x86.sh` generates the warning list; the raylib stub is still missing.** It needs `Color`, `KEY_ESCAPE` and 8 functions: `InitWindow`, `IsWindowReady`, `SetTargetFPS`, `IsKeyDown`, `BeginDrawing`, `EndDrawing`, `ClearBackground`, `DrawRectangle`.
 
 **Upstream PRs:**
@@ -294,6 +281,7 @@ Samples: seed 42 has 29483 player-samples, 90676 fronts, 931 beyond slot 5; seed
 **Deferred experiments and refactors:**
 
 - **A `max_steps` experiment**, with its own control.
+- **`drive` output fix (proto).** Relabel "mean episode length" (it counts env episodes, not seat episodes, §6.2), aggregate the log over all envs instead of env0, and print `eliminated / timeout / rival_won`.
 - **Re-run the neighbour histogram against a trained policy.** A policy that sprawls thin shifts it right, which would test the cap of 5.
 - **Collapse `pos[]` into global `tile_pos` / `border_pos`.** That takes 144 B/tile to ~80. It's a standalone refactor that blocks nothing.
 
@@ -303,7 +291,7 @@ Samples: seed 42 has 29483 player-samples, 90676 fronts, 931 beyond slot 5; seed
 |---|---|
 | 0 | Throughput prototype. Done. |
 | 1 | Action space, mechanics, `Env` refactor and binding. Done; the clause-by-clause audit (§5.3) is still owed. |
-| 2 | **Underway.** Training works. Tier A done. Now: perf → B-lite → retrain → draft PR. |
+| 2 | **Underway.** Training works. Tier A, B-lite and the retrain done. Now: render check → pre-PR items → draft PR. |
 | 3 | Self-play. Scripted bots become held-out eval opponents via `PUF_HAS_BOT_POLICY` / `puf_set_bot_policy(Env*, int)`, which upstream already ships. Note that `src/pufferl.cu:1850` asserts the GPU env backend doesn't support selfplay or `match`; OpenFront is a CPU env, so it isn't blocked. |
 | 4 | Sweep, polish, PR. |
 
@@ -311,11 +299,42 @@ Samples: seed 42 has 29483 player-samples, 90676 fronts, 931 beyond slot 5; seed
 
 ## 6. Training
 
-### 6.1 Results so far (all pre-Tier-A)
+### 6.1 Results so far
+
+**26 Sept, B-lite and build ablations, 100M, 2×512.** All runs are `num_agents=1`, `agent_is_bot=1`, fork 5.0 at `70f34d75`. The ablation variants were one-line `sed`s on a throwaway Vast clone and were never committed:
+
+- **No builds (7 act):** `ACT_SIZES {13}` → `{7}` (line 109).
+- **Builds-as-noop:** line 3362 `if (action >= ACT_BUILD_CITY) {` → `{ return;`.
+- **Posts off:** line 3373 `int nb_p[MAXP], nb_shared[MAXP];` → prefixed `return; `.
+- **Cities off:** line 3369 `if (action == ACT_BUILD_CITY) {` → `{ return;`.
+
+Final dashboard values:
+
+| Config | Seed | perf | win | elim | tmo | rival | len | cities | posts | noops | ent |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Full B-lite (13 act) | 73 | .702 | .809 | .086 | .079 | .026 | 145.8 | 2.874 | 6.442 | 74.46 | 1.866 |
+| Full B-lite | 74 | .699 | .806 | .092 | .075 | .027 | 144.8 | 2.898 | 6.319 | 70.92 | 1.897 |
+| No builds (7 act) | 73 | .338 | .205 | .392 | .394 | .009 | 149.6 | 0 | 0 | 0 | 1.265 |
+| No builds (7 act) | 74 | .333 | .194 | .395 | .404 | .008 | 149.4 | 0 | 0 | 0 | 1.240 |
+| Builds-as-noop (13) | 73 | .338 | .209 | .386 | .396 | .009 | 149.2 | 0 | 0 | 0 | 2.037 |
+| Builds-as-noop (13) | 74 | .328 | .189 | .394 | .406 | .010 | 149.6 | 0 | 0 | 0 | 2.033 |
+| Posts off | 73 | .337 | .201 | .386 | .402 | .011 | 150.6 | .002 | 0 | 0 | 1.957 |
+| Cities off | 73 | .541 | .467 | .183 | .319 | .031 | 152.7 | 0 | 8.791 | 63.94 | 1.970 |
+| Cities off | 74 | .540 | .468 | .186 | .319 | .027 | 151.6 | 0 | 8.771 | 63.61 | 1.970 |
+
+The pre-Tier-A 2×512 reference is .354 / .342 (21 Sept table below).
+
+**Reading of the ablations:**
+
+- **Tier A alone does not move perf.** No-builds averages 0.336 against the pre-Tier-A 0.348, under the 0.03 noise bar. It shifts outcomes toward timeouts: elim .44→.39, timeout .26→.40, win .28→.20.
+- **The extra action ids contribute nothing.** Builds-as-noop equals the 7-action control. Its entropy of 2.03 is mass spread over 7 equivalent wait ids, not exploration.
+- **Posts and cities interact.** Posts alone (cities off): +0.20. Cities alone (posts off): 0, because the policy stops building them. Both: +0.36, so cities add +0.16 only when posts exist.
+- **The bot switch works against the agent.** `bot_send` (`openfront.h:1761`) uses `expand_ratio` (0.10–0.20) instead of `reserve_ratio` (0.30–0.40) against a Bot owning any structure (both drawn with `rng_int`, upper bound exclusive). Bots therefore attack structure owners with more troops. The "build to pacify bots" hypothesis is refuted.
+- **Hypothesis, from code reading only, not measured:** a captured city changes owner (`openfront.h:848`), so undefended cities feed the bots, and posts make cities safe. Pending the render check that cities sit in the interior behind posted fronts.
 
 **17 Sept, open grid, 1×128, 500M.** Perf (land share) reached 0.331 and win 0.086, against a random baseline of 0.004 and 0. Entropy settled at 1.244 with `clipfrac` and `kl` at 0. That's clean convergence, not collapse. Win outpaced perf (5.4× vs 1.5×) while annexations stayed flat, so the shaping handed off to the objective as designed. Diagnosis: a capability ceiling.
 
-**21 Sept, terrain, 100M each:**
+**21 Sept, terrain, 100M each (pre-Tier-A):**
 
 | policy | seed | perf | win | eliminated | timeout | rival_won | annex/ep |
 |---|---|---|---|---|---|---|---|
@@ -329,18 +348,37 @@ Samples: seed 42 has 29483 player-samples, 90676 fronts, 931 beyond slot 5; seed
 - **Terrain didn't move the ceiling.** 1×128 perf was 0.330 vs 0.315 on the open grid.
 - **The win rate tripled mechanically**, because the 0.8 bar fell.
 - **Capacity helped, but only slightly** (+0.02).
-- **Elimination sits at ~45% regardless of policy.** That's the number spatial obs has to move.
+- **Elimination sat at ~45% regardless of policy** pre-Tier-A. B-lite brought it to ~9% (table above).
 - **Seed variance is about ±0.013 perf at 100M.** Differences under ~0.03 are noise.
 
 Checkpoints are on the Mac at `~/summer26/ckpts/step7/run{0..4}_*.bin`: run0 is the 10M smoke run, run1 1×128 s73, run2 2×512 s73, run3 1×128 s74 and run4 2×512 s74. To eval 1×128 files, pass `--policy.hidden_size=128 --policy.num_layers=1`.
 
+The 26 Sept checkpoints are also on the Mac, under `~/summer26/ckpts/`, each with its `.ini` and `run_*.log`:
+
+- `blite/`: `1790385620537` (s73), `1790386218335` (s74).
+- `nobuild/`: `nb_1790466617024` (s73), `nb_1790467146736` (s74). These have a 7-action head (6,387,712 B) and need a `{7}` build to eval.
+- `buildnoop/`: `bn_1790467900236` (s73), `bn_1790468429280` (s74).
+- `ablate/`: `1790469704565` (posts-off s73), `1790470339532` (cities-off s73), `1790470828011` (cities-off s74).
+
+The ablation checkpoints were trained under patched headers. Evaluating them on the stock build changes their environment.
+
 ### 6.2 Reading runs
 
-- **Sanity-check epoch 1 against the random baseline.** At `agent_is_bot = 1`, a random policy dies around decision 55 with perf ≈ 0.004 and entropy just under ln 7 = 1.946. A suspiciously good curve means a config key defaulted. This check is also what proves the ini is well-formed.
+- **Sanity-check epoch 1 for entropy and build counters only.** A random policy starts at entropy just under ln 13 = 2.565 on the 13-action build (ln 7 = 1.946 for a 7-action build). A suspiciously good curve means a config key defaulted, and this check is also what proves the ini is well-formed.
+- **Never read perf or length off the first dashboard row.** Logs flush on a 0.6 s wall clock (`src/pufferl.cu:3137-3156`), so the first row holds only seat episodes that ended in the first window, and those are all deaths. Observed row: ~65.5K steps, ep_len ~50, perf ~0.000, elim 0.99. A window-W reproduction matched at W≈128 against the 65.5K = 1024×64 steps shown; the likely reconciliation is `num_buffers=2`, which is inferred and unverified.
 - **Read centres, not samples.** Dashboard `win` swings in a ±0.04 band from epoch to epoch. Two wrong calls have already been made off single samples. Compare centres across large step gaps.
 - **Don't report win rate as a headline.** It's cap-limited, since most games hit the 2000-tick cap. Perf (land share at a fixed horizon) is the eval metric, and "beat the scripted bots" is retired as a milestone.
 
-**Random-policy reference**, measured through the binding with 4 envs. It's pre-terrain and pre-Tier-A, so it's qualitative only:
+**Random-policy baselines** (unbiased: config = ini, full episodes, ~4000 episodes over 1024 envs, slightly short-biased). Compare trained runs against these, not against epoch 1:
+
+| Actions | ep_len | perf | elim | timeout | rival |
+|---|---|---|---|---|---|
+| 13 | 65.9 | 0.0267 | 0.911 | 0.073 | 0.015 |
+| 7 | 45.1 | 0.0016 | 0.994 | 0.005 | 0.002 |
+
+**`drive`'s "mean episode length" counts env episodes, not seat episodes.** The sim continues after the agent dies, which is why it reads ~190. The seat's `ep_len` is the comparable number. The fix is an open proto item (§5.3).
+
+**Older random-policy reference**, measured through the binding with 4 envs. It's pre-terrain and pre-Tier-A, so it's qualitative only:
 
 | config | land share | wins | seat-0 lifespan | return |
 |---|---|---|---|---|
@@ -353,8 +391,8 @@ Checkpoints are on the Mac at `~/summer26/ckpts/step7/run{0..4}_*.bin`: run0 is 
 - **Config:** `config/openfront.ini` is read, and `[env]` keys reach `puf_init`. Set `device = cuda`, which is committed; with `cpu` the GPU sat at 3%.
 - **Checkpoints:** `checkpoint_dir` and `checkpoint_interval` live in `[base]`. The interval counts **epochs**, not steps: 100M ≈ 1525 epochs. The final epoch always saves. Weights are flat fp32 `.bin` files.
 - **Eval is a Mac job.** The Mac `--cpu` binary loads and renders Vast `.bin` checkpoints (tested 21 Sept) with `./openfront <ckpt.bin>`, run from the repo root. The binary reads `config/openfront.ini` from the cwd, so the policy shape must match the checkpoint. `--headless --eval_episodes=N` prints metrics. In the render, the agent is seat 1 in red. `./puffer eval` segfaults when headless on Vast, and under `xvfb-run` it prints nothing. Don't spend instance time on it.
-- **Throughput:** ~290K SPS measured pre-Tier-A. The sim bench is now ~830k vs ~750k+ then (different workloads), so re-measure SPS on the retrain rather than projecting. The dashboard `SPS` reads high; use steps ÷ uptime. The env is 81–95% of the loop and the GPU idles, so if learning stalls the fix is reward, obs or capacity, never throughput.
-- **Memory:** `pufferl.cu` allocates `(total_agents / num_agents) × sizeof(Env)`. `sizeof(Env)` is 1,022,240 bytes. The 20 Sept decomposition (at 938 KB) was ~179 B per scaling tile plus ~525 KB fixed (32 `Attack` slots, each with a heap); 4b's scratch arrays and 1a's border bitsets have added to both since. Larger grids are reachable without a refactor: 128×128 is ~3.5 GB of host RAM at 1024 agents, with step time ~7× slower. 48×48 is a held experimental constant, not a memory wall. The honest answer to "why 48×48" on stream is that the territory representation is O(P·N) and hasn't been refactored yet. Upstream's smallest shipped map is ~350×350.
+- **Throughput differs up to ~2× by host:** 190K on a 6-core box vs 240K+ elsewhere, by steps ÷ uptime. The dashboard `SPS` is the last log interval, not the run. Don't record SPS across hosts; measure only A/B on one box. The env is 81–95% of the loop and the GPU idles, so if learning stalls the fix is reward, obs or capacity, never throughput.
+- **Memory:** `pufferl.cu` allocates `(total_agents / num_agents) × sizeof(Env)`. `sizeof(Env)` is 1,044,816 bytes. The 20 Sept decomposition (at 938 KB) was ~179 B per scaling tile plus ~525 KB fixed (32 `Attack` slots, each with a heap); 4b's scratch arrays and 1a's border bitsets have added to both since. Larger grids are reachable without a refactor: 128×128 is ~3.5 GB of host RAM at 1024 agents, with step time ~7× slower. 48×48 is a held experimental constant, not a memory wall. The honest answer to "why 48×48" on stream is that the territory representation is O(P·N) and hasn't been refactored yet. Upstream's smallest shipped map is ~350×350.
 
 ---
 
