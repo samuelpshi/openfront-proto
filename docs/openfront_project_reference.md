@@ -432,10 +432,13 @@ Claim only what is built and shipped. No feature lists; mention only mechanics t
 - Tier A conformance to upstream `7defd24` for the territorial core, backed by a golden-vector combat test and a scenario test (`annex_hole_test`) that fails on the pre-fix code. Say "reimplemented from the source's mechanics."
 - Output byte-identical across arm64 and x86_64, with hashed baselines gating each behavioural change.
 - O(1) incremental border maintenance, as an original design decision.
+- Implemented gold, City and Defense Post in C, with build actions and automatic placement.
+- Ablations (§6.1): structures raise land share from 0.34 to 0.70. Posts alone reach 0.54, and cities add value only alongside posts. Tier A mechanics alone leave perf flat. Scope to state with these numbers: 2 seeds each, 100M, 2×512, 48×48, one agent vs 7 scripted bots, perf = land share at the fixed horizon.
 
-**True but stale; refresh after the retrain and the perf pass:**
+**Pre-Tier-A context only:** the ~35% average land share at 100M (2×512: 0.354 / 0.342), against random play at 0.4%. Superseded as a headline by the ablation numbers above.
 
-- The ~35% average land share at 100M (2×512: 0.354 / 0.342), against random play at 0.4%. It's "nearly 3× an even split": by symmetry, the bots' average can't exceed 12.5%, and the agent plays with the same handicaps.
+**True but stale; re-measure before quoting:**
+
 - The throughput figure: ~830k ticks/sec on the current header (M3 Pro, single core); re-measure after B-lite before quoting.
 
 **Never write:**
@@ -444,7 +447,15 @@ Claim only what is built and shipped. No feature lists; mention only mechanics t
 - **"Validated against the original."** No differential test exists.
 - **Win rate.**
 
-**Not yet true:** maintainer review, an open or merged PR, "contributed", or anything about structures or gold. Fork commits don't reach the contribution graph; only merged upstream PRs do.
+**Not claimable:**
+
+- **Any claim of balance or fidelity for posts' strength.** Post range 6 is a rescale (§4), and it's an open question for Joseph (§5.2).
+- **The captured-city mechanism.** It's a hypothesis from code reading; the render check is pending (§6.1).
+- **"Beats the bots" as a headline.** Retired; win is cap-limited.
+- **Any cross-host throughput number** (§6.3).
+- **Anything about self-play, spatial obs or larger maps.**
+
+**Not yet true:** maintainer review, an open or merged PR, "contributed". Fork commits don't reach the contribution graph; only merged upstream PRs do.
 
 **Resume draft** (24 Sept, adoption unconfirmed; bullet 2's throughput number is stale):
 
