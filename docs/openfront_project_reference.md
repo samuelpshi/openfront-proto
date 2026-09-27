@@ -461,10 +461,8 @@ Claim only what is built and shipped. No feature lists; mention only mechanics t
 
 ```
 OpenFront RL Environment – PufferLib | C	May 2026 – Present
-Built an 8-player territory-conquest environment in C for training reinforcement learning agents
-Reimplemented the game's core mechanics from the original source, running at ~1M simulation steps per second
-Designed observation spaces and reward structures; trained agents to ~35% average land share in 8-player games, nearly 3× an even split
-Wrote a test suite verifying the simulation's mechanics and producing identical results across platforms
+- Built a C reimplementation of the strategy game OpenFront as a PufferLib reinforcement-learning environment, simulating ~800K game ticks/sec on one core.
+- Added an in-game economy and buildings (gold, cities, defense posts); ablation runs showed they double a PPO agent's territory against scripted bots (34% → 70% land share, 2 seeds).
 ```
 
-After B-lite, add "and structure economy" to bullet 1. If the retrained agent demonstrably builds Cities and Posts under pressure, that result replaces the land-share line.
+After the PR merges, add 'merged upstream into PufferLib'.
